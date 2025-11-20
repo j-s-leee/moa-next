@@ -17,13 +17,23 @@
 - [x] Tailwind CSS 설정
 - [x] shadcn/ui 설정
 - [x] 기본 레이아웃 구조
-- [ ] Supabase 프로젝트 생성 및 연결
-- [ ] Drizzle ORM 설정
-- [ ] 환경 변수 설정
+- [x] Supabase 프로젝트 생성 및 연결
+- [x] Drizzle ORM 설정
+- [x] 환경 변수 설정
 
-**진척도**: 70% 완료
+**진척도**: 100% 완료 ✅
 
-**다음 작업**: Supabase 연결 및 Drizzle 설정
+**완료된 작업**:
+
+- Supabase 클라이언트 라이브러리 설치 (`@supabase/supabase-js`, `@supabase/ssr`)
+- Drizzle ORM 및 관련 패키지 설치 (`drizzle-orm`, `drizzle-kit`, `postgres`)
+- Supabase 클라이언트 설정 파일 생성 (`lib/supabase/client.ts`, `lib/supabase/server.ts`)
+- Drizzle 설정 파일 생성 (`drizzle.config.ts`)
+- 데이터베이스 연결 파일 생성 (`lib/db/index.ts`)
+- 스키마 파일 초기화 (`lib/db/schema.ts`)
+- package.json에 Drizzle 스크립트 추가
+
+**다음 작업**: Phase 1.1 - 데이터베이스 스키마 설계 및 구현
 
 ---
 
@@ -31,35 +41,53 @@
 
 ### 1.1 데이터베이스 스키마 설계
 
-- [ ] Drizzle 스키마 파일 생성 (`lib/db/schema.ts`)
-- [ ] User 테이블 설계
-- [ ] Book 테이블 설계 (개인/공동 가계부)
-- [ ] Category 테이블 설계
-- [ ] Budget 테이블 설계
-- [ ] Expense 테이블 설계
-- [ ] Income 테이블 설계
-- [ ] 관계(Relations) 정의
+- [x] Drizzle 스키마 파일 생성 (`lib/db/schema.ts`)
+- [x] User 테이블 설계 (Supabase Auth 연동)
+- [x] Book 테이블 설계 (개인/공동 가계부)
+- [x] BookMembers 테이블 설계 (공동 가계부 멤버)
+- [x] BookInvitations 테이블 설계 (Resend 초대 기능)
+- [x] Category 테이블 설계
+- [x] Budget 테이블 설계 (예산 이력 관리 포함)
+- [x] Expense 테이블 설계
+- [x] Income 테이블 설계 (actual/transfer 타입 구분)
+- [x] 관계(Relations) 정의
+- [x] 인덱스 설계 (성능 최적화)
 
-**참고 문서**: `docs/data-relationship.md`
+**참고 문서**: `docs/data-relationship.md`, `docs/brainstorm.md`
 
-**진척도**: 0% 완료
+**진척도**: 100% 완료 ✅
 
-**우선순위**: 🔴 최우선
+**완료된 작업**:
 
-**예상 작업 시간**: 4-6시간
+- 모든 테이블 스키마 정의 완료
+- Enum 타입 정의 (book_type, category_type, expense_type 등)
+- 외래키 관계 설정
+- 인덱스 설계 (조회 성능 최적화)
+- Drizzle Relations 정의
+
+**다음 작업**: Phase 1.2 - 마이그레이션 및 초기 데이터
 
 ### 1.2 마이그레이션 및 초기 데이터
 
-- [ ] Drizzle 마이그레이션 생성
-- [ ] Supabase에 마이그레이션 적용
-- [ ] 기본 카테고리 시드 데이터 준비
-- [ ] 테스트 데이터 생성 스크립트
+- [x] Drizzle 마이그레이션 생성
+- [x] Supabase에 마이그레이션 적용
+- [x] 기본 카테고리 시드 데이터 준비
+- [x] 테스트 데이터 생성 스크립트
 
-**진척도**: 0% 완료
+**진척도**: 100% 완료 ✅
+
+**완료된 작업**:
+
+- 마이그레이션 파일 생성 완료 (`drizzle/0000_chief_hiroim.sql`)
+- Supabase에 스키마 적용 완료
+- Supabase Auth 연동 설정 완료 (`001_auth_foreign_key.sql`)
+- RLS 정책 설정 완료 (`002_rls_policies.sql`)
+- 시드 데이터 스크립트 작성 완료 (`lib/db/seed.ts`)
+- 회원가입 시 자동 실행 함수 작성 완료 (`lib/db/seed-helpers.ts`)
+
+**다음 작업**: Phase 2.1 - Supabase 인증 설정
 
 **우선순위**: 🔴 최우선
-
-**예상 작업 시간**: 2-3시간
 
 ---
 
@@ -438,7 +466,9 @@
 
 ### 완료된 작업
 
-- ✅ 프로젝트 초기 설정 (70%)
+- ✅ 프로젝트 초기 설정 (100%)
+- ✅ Supabase 연결 및 Drizzle ORM 설정 완료
+- ✅ 데이터베이스 스키마 설계 및 마이그레이션 적용 완료
 - ✅ 기본 UI 컴포넌트 구조
 - ✅ 일부 페이지 UI 구현 (가계부, 예산, 카테고리, 대시보드, 요약)
 
@@ -448,7 +478,7 @@
 
 ### 다음 우선 작업 (순서대로)
 
-1. **Phase 1**: 데이터베이스 스키마 설계 및 구현
+1. **Phase 1.2**: 기본 카테고리 시드 데이터 준비
 2. **Phase 2**: 인증 및 사용자 관리
 3. **Phase 3**: 개인 가계부 기본 기능 (API 구현)
 4. **Phase 4**: 예산 관리 기능 (API 구현)
