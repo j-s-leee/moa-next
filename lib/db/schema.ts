@@ -281,29 +281,39 @@ export const incomes = pgTable(
     bookId: uuid("book_id")
       .notNull()
       .references(() => books.id, { onDelete: "cascade" }),
+    categoryId: uuid("category_id").references(() => categories.id, {
+      onDelete: "cascade",
+    }), // 수입 카테고리 (기존 데이터 호환을 위해 nullable)
     amount: integer("amount").notNull(), // 수입 금액 (원 단위)
-    period: incomePeriodEnum("period").notNull(), // 'monthly' | 'yearly'
-    source: text("source").notNull(), // 수입 출처 (급여, 용돈 등)
+    // 단일 거래 vs 반복 수입 구분
+    // 단일 거래: date만 사용, period와 startDate/endDate는 null
+    // 반복 수입: period와 startDate/endDate 사용, date는 null
+    date: timestamp("date"), // 단일 거래 날짜 (프리랜서, 자영업자용)
+    period: incomePeriodEnum("period"), // 'monthly' | 'yearly' (반복 수입용, nullable)
+    source: text("source"), // 수입 출처 (선택사항, 카테고리 이름으로 대체 가능)
     incomeType: incomeTypeEnum("income_type").notNull().default("actual"), // 'actual' | 'transfer'
     transferredFromBookId: uuid("transferred_from_book_id").references(
       () => books.id,
       { onDelete: "set null" }
     ), // 이체인 경우 출처 가계부 ID
-    startDate: timestamp("start_date").notNull(),
-    endDate: timestamp("end_date"), // 종료 날짜 (null이면 무기한)
+    startDate: timestamp("start_date"), // 반복 수입 시작 날짜 (nullable)
+    endDate: timestamp("end_date"), // 반복 수입 종료 날짜 (null이면 무기한)
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => ({
     bookIdx: index("incomes_book_id_idx").on(table.bookId),
+    categoryIdx: index("incomes_category_id_idx").on(table.categoryId),
     typeIdx: index("incomes_income_type_idx").on(table.incomeType),
     transferredFromIdx: index("incomes_transferred_from_idx").on(
       table.transferredFromBookId
     ),
+    dateIdx: index("incomes_date_idx").on(table.date), // 단일 거래 날짜 인덱스
     dateRangeIdx: index("incomes_date_range_idx").on(
       table.startDate,
       table.endDate
-    ),
+    ), // 반복 수입 기간 인덱스
+    bookDateIdx: index("incomes_book_date_idx").on(table.bookId, table.date), // 가계부별 단일 거래 조회용
   })
 );
 

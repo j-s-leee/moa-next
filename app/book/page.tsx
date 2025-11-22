@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AppLayout } from "@/components/app-layout";
-import CalendarPricing from "@/components/ui/calendar-pricing";
+import { ExpenseCalendar } from "@/components/ui/expense-calendar";
 import {
   Drawer,
   DrawerContent,
@@ -16,33 +17,40 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   ChevronDown,
-  UtensilsCrossed,
-  ShoppingCart,
-  Coffee,
-  Home,
-  Car,
-  CreditCard,
-  Smartphone,
-  Wallet,
   Plus,
   ArrowUpDown,
-  Filter,
+  Loader2,
+  Edit2,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { Separator } from "@/components/ui/separator";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   ButtonGroup,
   ButtonGroupText,
   ButtonGroupSeparator,
 } from "@/components/ui/button-group";
+import * as LucideIcons from "lucide-react";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { MoreVertical } from "lucide-react";
 
 function MonthSelector({
   selectedDate,
@@ -156,114 +164,104 @@ function MonthSelector({
   );
 }
 
+// API 응답 타입 정의
 interface ExpenseItem {
   id: string;
-  date: Date;
+  bookId: string;
+  categoryId: string;
   category: {
+    id: string;
     name: string;
-    icon: LucideIcon;
+    icon: string | null;
+    type: "expense" | "income";
   };
-  paymentMethod: string;
-  time: string;
   amount: number;
-  type: "expense" | "income";
+  date: string; // ISO string
+  description: string | null;
+  userId: string;
+  budgetId: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
-const categoryIcons: Record<string, LucideIcon> = {
-  식비: UtensilsCrossed,
-  쇼핑: ShoppingCart,
-  카페: Coffee,
-  주거: Home,
-  교통: Car,
-};
-
-const paymentMethods = [
-  "신용카드",
-  "체크카드",
-  "현금",
-  "계좌이체",
-  "모바일페이",
-];
-
-// 샘플 데이터 생성 함수
-function generateExpenseItems(
-  count: number = 30,
-  selectedMonth?: Date
-): ExpenseItem[] {
-  const categories = Object.keys(categoryIcons);
-  const items: ExpenseItem[] = [];
-  const now = selectedMonth || new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  for (let i = 0; i < count; i++) {
-    const day = Math.floor(Math.random() * daysInMonth) + 1;
-    const date = new Date(year, month, day);
-    const categoryName =
-      categories[Math.floor(Math.random() * categories.length)];
-    const hour = Math.floor(Math.random() * 24);
-    const minute = Math.floor(Math.random() * 60);
-    const time = `${String(hour).padStart(2, "0")}:${String(minute).padStart(
-      2,
-      "0"
-    )}`;
-    const amount = Math.floor(Math.random() * 100000) + 1000;
-    const type = Math.random() > 0.7 ? "income" : "expense"; // 30% 확률로 수입
-
-    items.push({
-      id: `expense-${i}`,
-      date,
-      category: {
-        name: categoryName,
-        icon: categoryIcons[categoryName],
-      },
-      paymentMethod:
-        paymentMethods[Math.floor(Math.random() * paymentMethods.length)],
-      time,
-      amount,
-      type,
-    });
-  }
-
-  return items.sort((a, b) => {
-    // 날짜순 정렬 (최신순)
-    const dateDiff = b.date.getTime() - a.date.getTime();
-    if (dateDiff !== 0) return dateDiff;
-    // 같은 날짜면 시간순 정렬
-    const [aHour, aMinute] = a.time.split(":").map(Number);
-    const [bHour, bMinute] = b.time.split(":").map(Number);
-    if (aHour !== bHour) return bHour - aHour;
-    return bMinute - aMinute;
-  });
+interface IncomeItem {
+  id: string;
+  bookId: string;
+  categoryId: string | null; // nullable로 변경
+  category: {
+    id: string;
+    name: string;
+    icon: string | null;
+    type: "expense" | "income";
+  } | null; // nullable로 변경
+  amount: number;
+  date: string | null; // 단일 거래 날짜 (ISO string, nullable)
+  period: "monthly" | "yearly" | null; // 반복 주기 (nullable)
+  source: string | null;
+  incomeType: "actual" | "transfer";
+  transferredFromBookId: string | null;
+  startDate: string | null; // 반복 수입 시작 날짜 (ISO string, nullable)
+  endDate: string | null; // 반복 수입 종료 날짜 (ISO string, nullable)
+  createdAt: string;
+  updatedAt: string;
 }
 
-// 날짜별로 그룹화하는 함수
-function groupByDate(items: ExpenseItem[]): Map<string, ExpenseItem[]> {
-  const grouped = new Map<string, ExpenseItem[]>();
+// 아이콘 동적 로드 헬퍼
+function getIconComponent(iconName: string | null): LucideIcon | null {
+  if (!iconName) return null;
+  return ((LucideIcons as any)[iconName] as LucideIcon) || null;
+}
 
-  items.forEach((item) => {
-    const dateKey = item.date.toISOString().split("T")[0]; // YYYY-MM-DD 형식
+// 통합된 거래 아이템 타입 (지출 + 단일 거래 수입)
+type TransactionItem = ExpenseItem | (IncomeItem & { date: string });
+
+// 날짜별로 그룹화하는 함수 (지출과 단일 거래 수입 통합)
+function groupByDate(
+  expenses: ExpenseItem[],
+  incomes: IncomeItem[]
+): Map<string, TransactionItem[]> {
+  const grouped = new Map<string, TransactionItem[]>();
+
+  // 지출 추가
+  expenses.forEach((item) => {
+    const dateKey = new Date(item.date).toISOString().split("T")[0]; // YYYY-MM-DD 형식
     if (!grouped.has(dateKey)) {
       grouped.set(dateKey, []);
     }
     grouped.get(dateKey)!.push(item);
   });
 
+  // 단일 거래 수입 추가 (date가 있는 수입만)
+  incomes.forEach((item) => {
+    if (item.date) {
+      const dateKey = new Date(item.date).toISOString().split("T")[0];
+      if (!grouped.has(dateKey)) {
+        grouped.set(dateKey, []);
+      }
+      grouped.get(dateKey)!.push(item as TransactionItem);
+    }
+  });
+
   return grouped;
 }
 
-// 날짜별 수입/지출 합계 계산
-function calculateDailyTotals(items: ExpenseItem[]): {
+// 날짜별 수입/지출 합계 계산 (통합된 거래 아이템)
+function calculateDailyTotals(items: TransactionItem[]): {
   income: number;
   expense: number;
 } {
   return items.reduce(
     (totals, item) => {
-      if (item.type === "income") {
-        totals.income += item.amount;
+      // ExpenseItem인 경우
+      if ("userId" in item && "budgetId" in item) {
+        if (item.category.type === "income") {
+          totals.income += item.amount;
+        } else {
+          totals.expense += item.amount;
+        }
       } else {
-        totals.expense += item.amount;
+        // IncomeItem인 경우 (단일 거래)
+        totals.income += item.amount;
       }
       return totals;
     },
@@ -280,17 +278,20 @@ function formatDate(date: Date): string {
   return `${month}월 ${day}일 (${weekday})`;
 }
 
-// 월별 총 수입/지출 계산
-function calculateMonthlyTotals(selectedMonth: Date): {
-  income: number;
-  expense: number;
-} {
-  const expenses = generateExpenseItems(30, selectedMonth);
-  return calculateDailyTotals(expenses);
-}
-
-function MonthlySummaryCard({ selectedMonth }: { selectedMonth: Date }) {
-  const totals = calculateMonthlyTotals(selectedMonth);
+function MonthlySummaryCard({
+  expenses,
+  incomes,
+}: {
+  expenses: ExpenseItem[];
+  incomes: IncomeItem[];
+}) {
+  // 단일 거래 수입만 필터링
+  const singleTransactionIncomes = incomes.filter((income) => income.date);
+  const allTransactions: TransactionItem[] = [
+    ...expenses,
+    ...(singleTransactionIncomes as TransactionItem[]),
+  ];
+  const totals = calculateDailyTotals(allTransactions);
 
   return (
     <div className="p-4 bg-accent/50 rounded-lg">
@@ -310,108 +311,225 @@ function MonthlySummaryCard({ selectedMonth }: { selectedMonth: Date }) {
   );
 }
 
-function DailyExpenseList({ selectedMonth }: { selectedMonth: Date }) {
-  const [categoryFilter, setCategoryFilter] = useState<string>("all");
-  const [typeFilter, setTypeFilter] = useState<string>("all");
-  const [paymentMethodFilter, setPaymentMethodFilter] = useState<string>("all");
-  const [sortBy, setSortBy] = useState<string>("date-desc");
+function DailyExpenseList({
+  selectedMonth,
+  expenses,
+  incomes,
+  isLoading,
+  bookId,
+  onExpenseUpdate,
+  onIncomeUpdate,
+  typeFilter,
+  sortBy,
+  onFilterChange,
+  onSortChange,
+}: {
+  selectedMonth: Date;
+  expenses: ExpenseItem[];
+  incomes: IncomeItem[];
+  isLoading: boolean;
+  bookId: string | null;
+  onExpenseUpdate: (bookId: string) => void;
+  onIncomeUpdate: (bookId: string) => void;
+  typeFilter: string;
+  sortBy: string;
+  onFilterChange: (filter: string) => void;
+  onSortChange: (sort: string) => void;
+}) {
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletingIncomeId, setDeletingIncomeId] = useState<string | null>(null);
 
-  const expenses = generateExpenseItems(30, selectedMonth);
+  const handleDelete = async (expenseId: string) => {
+    if (!bookId) {
+      toast.error("가계부를 찾을 수 없습니다.");
+      return;
+    }
+
+    setDeletingId(expenseId);
+
+    try {
+      const response = await fetch(`/api/book/${bookId}/expense/${expenseId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        let errorMessage = "지출 삭제에 실패했습니다.";
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          // JSON 파싱 실패 시 기본 메시지 사용
+        }
+        throw new Error(errorMessage);
+      }
+
+      // 응답이 성공이면 (200-299 범위) - 응답 본문이 없을 수도 있음
+      try {
+        await response.json();
+      } catch {
+        // 응답 본문이 없거나 파싱 실패해도 성공으로 처리
+      }
+
+      toast.success("지출이 삭제되었습니다.");
+      if (bookId) {
+        onExpenseUpdate(bookId);
+      }
+    } catch (error) {
+      console.error("지출 삭제 오류:", error);
+      toast.error(
+        error instanceof Error ? error.message : "지출 삭제에 실패했습니다."
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleDeleteIncome = async (incomeId: string) => {
+    if (!bookId) {
+      toast.error("가계부를 찾을 수 없습니다.");
+      return;
+    }
+
+    setDeletingIncomeId(incomeId);
+
+    try {
+      const response = await fetch(`/api/book/${bookId}/income/${incomeId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        let errorMessage = "수입 삭제에 실패했습니다.";
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          // JSON 파싱 실패 시 기본 메시지 사용
+        }
+        throw new Error(errorMessage);
+      }
+
+      toast.success("수입이 삭제되었습니다.");
+      if (bookId) {
+        onIncomeUpdate(bookId);
+      }
+    } catch (error) {
+      console.error("수입 삭제 오류:", error);
+      toast.error(
+        error instanceof Error ? error.message : "수입 삭제에 실패했습니다."
+      );
+    } finally {
+      setDeletingIncomeId(null);
+    }
+  };
+
+  // 단일 거래 수입 필터링 (date가 있는 수입만)
+  const singleTransactionIncomes = incomes.filter((income) => income.date);
+
+  // 지출과 단일 거래 수입 통합
+  const allTransactions: TransactionItem[] = [
+    ...expenses,
+    ...(singleTransactionIncomes as TransactionItem[]),
+  ];
 
   // 필터링
-  const filteredExpenses = expenses.filter((expense) => {
-    if (categoryFilter !== "all" && expense.category.name !== categoryFilter) {
-      return false;
+  const filteredTransactions = allTransactions.filter((item) => {
+    if (typeFilter === "all") return true;
+
+    // ExpenseItem인 경우
+    if ("userId" in item && "budgetId" in item) {
+      return item.category.type === typeFilter;
     }
-    if (typeFilter !== "all" && expense.type !== typeFilter) {
-      return false;
-    }
-    if (
-      paymentMethodFilter !== "all" &&
-      expense.paymentMethod !== paymentMethodFilter
-    ) {
-      return false;
-    }
-    return true;
+
+    // IncomeItem인 경우 (단일 거래 수입)
+    return typeFilter === "income";
   });
 
   // 정렬
-  const sortedExpenses = [...filteredExpenses].sort((a, b) => {
+  const sortedTransactions = [...filteredTransactions].sort((a, b) => {
+    // 날짜 추출
+    const getDate = (item: TransactionItem): Date => {
+      if ("userId" in item && "budgetId" in item) {
+        return new Date(item.date);
+      } else {
+        return new Date((item as IncomeItem).date!);
+      }
+    };
+
+    const aDate = getDate(a).getTime();
+    const bDate = getDate(b).getTime();
+
+    // 타입 추출
+    const getType = (item: TransactionItem): "expense" | "income" => {
+      if ("userId" in item && "budgetId" in item) {
+        return item.category.type;
+      } else {
+        return "income";
+      }
+    };
+
+    const aType = getType(a);
+    const bType = getType(b);
+
     if (sortBy === "date-desc") {
-      const dateDiff = b.date.getTime() - a.date.getTime();
+      const dateDiff = bDate - aDate;
       if (dateDiff !== 0) return dateDiff;
-      const [aHour, aMinute] = a.time.split(":").map(Number);
-      const [bHour, bMinute] = b.time.split(":").map(Number);
-      if (aHour !== bHour) return bHour - aHour;
-      return bMinute - aMinute;
+      const aCreated = "createdAt" in a ? new Date(a.createdAt).getTime() : 0;
+      const bCreated = "createdAt" in b ? new Date(b.createdAt).getTime() : 0;
+      return bCreated - aCreated;
     } else if (sortBy === "date-asc") {
-      const dateDiff = a.date.getTime() - b.date.getTime();
+      const dateDiff = aDate - bDate;
       if (dateDiff !== 0) return dateDiff;
-      const [aHour, aMinute] = a.time.split(":").map(Number);
-      const [bHour, bMinute] = b.time.split(":").map(Number);
-      if (aHour !== bHour) return aHour - bHour;
-      return aMinute - bMinute;
+      const aCreated = "createdAt" in a ? new Date(a.createdAt).getTime() : 0;
+      const bCreated = "createdAt" in b ? new Date(b.createdAt).getTime() : 0;
+      return aCreated - bCreated;
     } else if (sortBy === "expense-amount-desc") {
       // 지출만 정렬, 수입은 뒤로
-      if (a.type === "expense" && b.type === "expense") {
+      if (aType === "expense" && bType === "expense") {
         return b.amount - a.amount;
       }
-      if (a.type === "expense") return -1;
-      if (b.type === "expense") return 1;
+      if (aType === "expense") return -1;
+      if (bType === "expense") return 1;
       // 둘 다 수입이면 날짜순
-      const dateDiff = b.date.getTime() - a.date.getTime();
-      if (dateDiff !== 0) return dateDiff;
-      const [aHour, aMinute] = a.time.split(":").map(Number);
-      const [bHour, bMinute] = b.time.split(":").map(Number);
-      if (aHour !== bHour) return bHour - aHour;
-      return bMinute - aMinute;
+      return bDate - aDate;
     } else if (sortBy === "expense-amount-asc") {
       // 지출만 정렬, 수입은 뒤로
-      if (a.type === "expense" && b.type === "expense") {
+      if (aType === "expense" && bType === "expense") {
         return a.amount - b.amount;
       }
-      if (a.type === "expense") return -1;
-      if (b.type === "expense") return 1;
+      if (aType === "expense") return -1;
+      if (bType === "expense") return 1;
       // 둘 다 수입이면 날짜순
-      const dateDiff = b.date.getTime() - a.date.getTime();
-      if (dateDiff !== 0) return dateDiff;
-      const [aHour, aMinute] = a.time.split(":").map(Number);
-      const [bHour, bMinute] = b.time.split(":").map(Number);
-      if (aHour !== bHour) return bHour - aHour;
-      return bMinute - aMinute;
+      return bDate - aDate;
     } else if (sortBy === "income-amount-desc") {
       // 수입만 정렬, 지출은 뒤로
-      if (a.type === "income" && b.type === "income") {
+      if (aType === "income" && bType === "income") {
         return b.amount - a.amount;
       }
-      if (a.type === "income") return -1;
-      if (b.type === "income") return 1;
+      if (aType === "income") return -1;
+      if (bType === "income") return 1;
       // 둘 다 지출이면 날짜순
-      const dateDiff = b.date.getTime() - a.date.getTime();
-      if (dateDiff !== 0) return dateDiff;
-      const [aHour, aMinute] = a.time.split(":").map(Number);
-      const [bHour, bMinute] = b.time.split(":").map(Number);
-      if (aHour !== bHour) return bHour - aHour;
-      return bMinute - aMinute;
+      return bDate - aDate;
     } else if (sortBy === "income-amount-asc") {
       // 수입만 정렬, 지출은 뒤로
-      if (a.type === "income" && b.type === "income") {
+      if (aType === "income" && bType === "income") {
         return a.amount - b.amount;
       }
-      if (a.type === "income") return -1;
-      if (b.type === "income") return 1;
+      if (aType === "income") return -1;
+      if (bType === "income") return 1;
       // 둘 다 지출이면 날짜순
-      const dateDiff = b.date.getTime() - a.date.getTime();
-      if (dateDiff !== 0) return dateDiff;
-      const [aHour, aMinute] = a.time.split(":").map(Number);
-      const [bHour, bMinute] = b.time.split(":").map(Number);
-      if (aHour !== bHour) return bHour - aHour;
-      return bMinute - aMinute;
+      return bDate - aDate;
     }
     return 0;
   });
 
-  const groupedByDate = groupByDate(sortedExpenses);
+  const groupedByDate = groupByDate(
+    sortedTransactions.filter(
+      (item) => "userId" in item && "budgetId" in item
+    ) as ExpenseItem[],
+    sortedTransactions.filter(
+      (item) => !("userId" in item && "budgetId" in item)
+    ) as IncomeItem[]
+  );
 
   // 날짜순 정렬 (정렬 옵션에 따라)
   const sortedDates = Array.from(groupedByDate.keys()).sort((a, b) => {
@@ -432,41 +550,50 @@ function DailyExpenseList({ selectedMonth }: { selectedMonth: Date }) {
     sortedDates.forEach((dateKey) => {
       const dateItems = groupedByDate.get(dateKey)!;
       dateItems.sort((a, b) => {
+        const getType = (item: TransactionItem): "expense" | "income" => {
+          if ("userId" in item && "budgetId" in item) {
+            return item.category.type;
+          } else {
+            return "income";
+          }
+        };
+
+        const aType = getType(a);
+        const bType = getType(b);
+
         if (sortBy === "expense-amount-desc") {
-          if (a.type === "expense" && b.type === "expense") {
+          if (aType === "expense" && bType === "expense") {
             return b.amount - a.amount;
           }
-          if (a.type === "expense") return -1;
-          if (b.type === "expense") return 1;
+          if (aType === "expense") return -1;
+          if (bType === "expense") return 1;
           return 0;
         } else if (sortBy === "expense-amount-asc") {
-          if (a.type === "expense" && b.type === "expense") {
+          if (aType === "expense" && bType === "expense") {
             return a.amount - b.amount;
           }
-          if (a.type === "expense") return -1;
-          if (b.type === "expense") return 1;
+          if (aType === "expense") return -1;
+          if (bType === "expense") return 1;
           return 0;
         } else if (sortBy === "income-amount-desc") {
-          if (a.type === "income" && b.type === "income") {
+          if (aType === "income" && bType === "income") {
             return b.amount - a.amount;
           }
-          if (a.type === "income") return -1;
-          if (b.type === "income") return 1;
+          if (aType === "income") return -1;
+          if (bType === "income") return 1;
           return 0;
         } else if (sortBy === "income-amount-asc") {
-          if (a.type === "income" && b.type === "income") {
+          if (aType === "income" && bType === "income") {
             return a.amount - b.amount;
           }
-          if (a.type === "income") return -1;
-          if (b.type === "income") return 1;
+          if (aType === "income") return -1;
+          if (bType === "income") return 1;
           return 0;
         }
         return 0;
       });
     });
   }
-
-  const categories = Object.keys(categoryIcons);
 
   // 필터 텍스트 변환 함수
   const getFilterText = (value: string) => {
@@ -494,6 +621,14 @@ function DailyExpenseList({ selectedMonth }: { selectedMonth: Date }) {
     }
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* 필터 및 정렬 UI */}
@@ -517,21 +652,21 @@ function DailyExpenseList({ selectedMonth }: { selectedMonth: Date }) {
                 <ButtonGroup aria-label="유형" className="w-full">
                   <Button
                     variant={typeFilter === "all" ? "default" : "outline"}
-                    onClick={() => setTypeFilter("all")}
+                    onClick={() => onFilterChange("all")}
                     className="flex-1"
                   >
                     전체
                   </Button>
                   <Button
                     variant={typeFilter === "income" ? "default" : "outline"}
-                    onClick={() => setTypeFilter("income")}
+                    onClick={() => onFilterChange("income")}
                     className="flex-1"
                   >
                     수입
                   </Button>
                   <Button
                     variant={typeFilter === "expense" ? "default" : "outline"}
-                    onClick={() => setTypeFilter("expense")}
+                    onClick={() => onFilterChange("expense")}
                     className="flex-1"
                   >
                     지출
@@ -543,14 +678,14 @@ function DailyExpenseList({ selectedMonth }: { selectedMonth: Date }) {
                 <ButtonGroup aria-label="정렬" className="w-full">
                   <Button
                     variant={sortBy === "date-desc" ? "default" : "outline"}
-                    onClick={() => setSortBy("date-desc")}
+                    onClick={() => onSortChange("date-desc")}
                     className="flex-1"
                   >
                     날짜 최신순
                   </Button>
                   <Button
                     variant={sortBy === "date-asc" ? "default" : "outline"}
-                    onClick={() => setSortBy("date-asc")}
+                    onClick={() => onSortChange("date-asc")}
                     className="flex-1"
                   >
                     날짜 오래된순
@@ -598,43 +733,243 @@ function DailyExpenseList({ selectedMonth }: { selectedMonth: Date }) {
 
                 {/* 해당 날짜의 거래 내역 */}
                 <div className="space-y-2">
-                  {dateItems.map((expense) => {
-                    const Icon = expense.category.icon;
-                    return (
-                      <div
-                        key={expense.id}
-                        className="flex items-center gap-4 p-3 rounded-lg bg-accent/50 hover:bg-accent/50 transition-colors"
-                      >
-                        <div className="flex items-center justify-center w-10 h-10 rounded-md bg-accent">
-                          <Icon className="h-5 w-5 text-muted-foreground" />
-                        </div>
-                        <div className="flex-1 min-w-0">
+                  {dateItems.map((item) => {
+                    // ExpenseItem인지 IncomeItem인지 확인
+                    const isExpense = "userId" in item && "budgetId" in item;
+                    const expense = isExpense ? (item as ExpenseItem) : null;
+                    const income = !isExpense ? (item as IncomeItem) : null;
+
+                    if (expense) {
+                      // 지출 아이템 렌더링
+                      const IconComponent = getIconComponent(
+                        expense.category.icon
+                      );
+                      const expenseDate = new Date(expense.date);
+                      const timeStr = expenseDate.toLocaleTimeString("ko-KR", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      });
+                      const isDeleting = deletingId === expense.id;
+
+                      return (
+                        <div
+                          key={expense.id}
+                          className="flex items-center gap-4 p-3 rounded-lg bg-accent/50 hover:bg-accent/50 transition-colors"
+                        >
+                          <div className="flex items-center justify-center w-10 h-10 rounded-md bg-accent">
+                            {IconComponent ? (
+                              <IconComponent className="h-5 w-5 text-muted-foreground" />
+                            ) : (
+                              <span className="text-lg">
+                                {expense.category.icon || "📦"}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">
+                                {expense.category.name}
+                              </span>
+                              {expense.description && (
+                                <span className="text-sm text-muted-foreground">
+                                  {expense.description}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              {timeStr}
+                            </div>
+                          </div>
                           <div className="flex items-center gap-2">
-                            <span className="font-medium">
-                              {expense.category.name}
-                            </span>
-                            <span className="text-sm text-muted-foreground">
-                              {expense.paymentMethod}
-                            </span>
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            {expense.time}
+                            <div className="text-right">
+                              <div
+                                className={`text-sm ${
+                                  expense.category.type === "income"
+                                    ? "text-blue-600 dark:text-blue-400"
+                                    : "text-red-600 dark:text-red-400"
+                                }`}
+                              >
+                                {expense.category.type === "income" ? "+" : "-"}
+                                {expense.amount.toLocaleString()}원
+                              </div>
+                            </div>
+                            {expense.category.type === "expense" && bookId && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    disabled={isDeleting}
+                                  >
+                                    {isDeleting ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <MoreVertical className="h-4 w-4" />
+                                    )}
+                                    <span className="sr-only">메뉴</span>
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem asChild>
+                                    <Link href={`/book/edit/${expense.id}`}>
+                                      <Edit2 className="mr-2 h-4 w-4" />
+                                      수정
+                                    </Link>
+                                  </DropdownMenuItem>
+                                  <AlertDialog>
+                                    <AlertDialogTrigger asChild>
+                                      <DropdownMenuItem
+                                        onSelect={(e) => e.preventDefault()}
+                                        className="text-destructive focus:text-destructive"
+                                      >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        삭제
+                                      </DropdownMenuItem>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent>
+                                      <AlertDialogHeader>
+                                        <AlertDialogTitle>
+                                          지출 삭제
+                                        </AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                          정말로 이 지출을 삭제하시겠습니까?
+                                          <br />이 작업은 되돌릴 수 없습니다.
+                                        </AlertDialogDescription>
+                                      </AlertDialogHeader>
+                                      <AlertDialogFooter>
+                                        <AlertDialogCancel>
+                                          취소
+                                        </AlertDialogCancel>
+                                        <AlertDialogAction
+                                          onClick={() =>
+                                            handleDelete(expense.id)
+                                          }
+                                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                        >
+                                          삭제
+                                        </AlertDialogAction>
+                                      </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                  </AlertDialog>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div
-                            className={`text-sm ${
-                              expense.type === "income"
-                                ? "text-blue-600 dark:text-blue-400"
-                                : "text-red-600 dark:text-red-400"
-                            }`}
-                          >
-                            {expense.type === "income" ? "+" : "-"}
-                            {expense.amount.toLocaleString()}원
+                      );
+                    } else if (income && income.date) {
+                      // 단일 거래 수입 아이템 렌더링
+                      const IconComponent = income.category
+                        ? getIconComponent(income.category.icon)
+                        : null;
+                      const incomeDate = new Date(income.date);
+                      const timeStr = incomeDate.toLocaleTimeString("ko-KR", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      });
+                      const categoryName =
+                        income.category?.name || income.source || "수입";
+                      const categoryIcon = income.category?.icon || "💰";
+                      const isDeletingIncome = deletingIncomeId === income.id;
+
+                      return (
+                        <div
+                          key={income.id}
+                          className="flex items-center gap-4 p-3 rounded-lg bg-accent/50 hover:bg-accent/50 transition-colors"
+                        >
+                          <div className="flex items-center justify-center w-10 h-10 rounded-md bg-accent">
+                            {IconComponent ? (
+                              <IconComponent className="h-5 w-5 text-muted-foreground" />
+                            ) : (
+                              <span className="text-lg">{categoryIcon}</span>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">
+                                {categoryName}
+                              </span>
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              {timeStr}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-right">
+                              <div className="text-sm font-medium text-blue-600 dark:text-blue-400">
+                                +{income.amount.toLocaleString()}원
+                              </div>
+                            </div>
+                            {bookId && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    disabled={isDeletingIncome}
+                                  >
+                                    {isDeletingIncome ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <MoreVertical className="h-4 w-4" />
+                                    )}
+                                    <span className="sr-only">메뉴</span>
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem asChild>
+                                    <Link
+                                      href={`/book/edit/${income.id}?type=income`}
+                                    >
+                                      <Edit2 className="mr-2 h-4 w-4" />
+                                      수정
+                                    </Link>
+                                  </DropdownMenuItem>
+                                  <AlertDialog>
+                                    <AlertDialogTrigger asChild>
+                                      <DropdownMenuItem
+                                        onSelect={(e) => e.preventDefault()}
+                                        className="text-destructive focus:text-destructive"
+                                      >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        삭제
+                                      </DropdownMenuItem>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent>
+                                      <AlertDialogHeader>
+                                        <AlertDialogTitle>
+                                          수입 삭제
+                                        </AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                          정말로 이 수입을 삭제하시겠습니까?
+                                          <br />이 작업은 되돌릴 수 없습니다.
+                                        </AlertDialogDescription>
+                                      </AlertDialogHeader>
+                                      <AlertDialogFooter>
+                                        <AlertDialogCancel>
+                                          취소
+                                        </AlertDialogCancel>
+                                        <AlertDialogAction
+                                          onClick={() =>
+                                            handleDeleteIncome(income.id)
+                                          }
+                                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                        >
+                                          삭제
+                                        </AlertDialogAction>
+                                      </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                  </AlertDialog>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    );
+                      );
+                    }
+                    return null;
                   })}
                 </div>
               </div>
@@ -646,33 +981,279 @@ function DailyExpenseList({ selectedMonth }: { selectedMonth: Date }) {
   );
 }
 
+function IncomeList({
+  selectedMonth,
+  incomes,
+  isLoading,
+  bookId,
+  onIncomeUpdate,
+}: {
+  selectedMonth: Date;
+  incomes: IncomeItem[];
+  isLoading: boolean;
+  bookId: string | null;
+  onIncomeUpdate: (bookId: string) => void;
+}) {
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const handleDelete = async (incomeId: string) => {
+    if (!bookId) {
+      toast.error("가계부를 찾을 수 없습니다.");
+      return;
+    }
+
+    setDeletingId(incomeId);
+
+    try {
+      const response = await fetch(`/api/book/${bookId}/income/${incomeId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        let errorMessage = "수입 삭제에 실패했습니다.";
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          // JSON 파싱 실패 시 기본 메시지 사용
+        }
+        throw new Error(errorMessage);
+      }
+
+      toast.success("수입이 삭제되었습니다.");
+      if (bookId) {
+        onIncomeUpdate(bookId);
+      }
+    } catch (error) {
+      console.error("수입 삭제 오류:", error);
+      toast.error(
+        error instanceof Error ? error.message : "수입 삭제에 실패했습니다."
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  // 반복 수입만 필터링 (period와 startDate가 있는 경우만)
+  const recurringIncomes = incomes.filter(
+    (income) => income.period && income.startDate
+  );
+
+  // 정렬 (시작일 기준 최신순)
+  const sortedIncomes = [...recurringIncomes].sort((a, b) => {
+    const aDate = new Date(a.startDate!).getTime();
+    const bDate = new Date(b.startDate!).getTime();
+    return bDate - aDate;
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (sortedIncomes.length === 0) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        수입 내역이 없습니다.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {sortedIncomes.map((income) => {
+        // 반복 수입만 표시 (period와 startDate가 있는 경우만)
+        if (!income.period || !income.startDate) return null;
+
+        const startDate = new Date(income.startDate!);
+        const endDate = income.endDate ? new Date(income.endDate) : null;
+        const isDeleting = deletingId === income.id;
+        const IconComponent = income.category
+          ? getIconComponent(income.category.icon)
+          : null;
+        const categoryName = income.category?.name || income.source || "수입";
+        const categoryIcon = income.category?.icon || "💰";
+
+        return (
+          <div
+            key={income.id}
+            className="flex items-center gap-4 p-3 rounded-lg bg-accent/50 hover:bg-accent/50 transition-colors"
+          >
+            <div className="flex items-center justify-center w-10 h-10 rounded-md bg-accent">
+              {IconComponent ? (
+                <IconComponent className="h-5 w-5 text-muted-foreground" />
+              ) : (
+                <span className="text-lg">{categoryIcon}</span>
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-medium">{categoryName}</span>
+                <Badge variant="secondary" className="text-xs">
+                  {income.period === "monthly" ? "월간" : "연간"}
+                </Badge>
+                {income.incomeType === "transfer" && (
+                  <Badge variant="outline" className="text-xs">
+                    이체
+                  </Badge>
+                )}
+              </div>
+              <div className="text-sm text-muted-foreground">
+                {startDate.toLocaleDateString("ko-KR")}
+                {endDate && ` ~ ${endDate.toLocaleDateString("ko-KR")}`}
+                {!endDate && " ~ 무기한"}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="text-right">
+                <div className="text-sm font-medium text-blue-600 dark:text-blue-400">
+                  +{income.amount.toLocaleString()}원
+                </div>
+              </div>
+              {bookId && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      disabled={isDeleting}
+                    >
+                      {isDeleting ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <MoreVertical className="h-4 w-4" />
+                      )}
+                      <span className="sr-only">메뉴</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem asChild>
+                      <Link href={`/book/edit/${income.id}?type=income`}>
+                        <Edit2 className="mr-2 h-4 w-4" />
+                        수정
+                      </Link>
+                    </DropdownMenuItem>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <DropdownMenuItem
+                          onSelect={(e) => e.preventDefault()}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          삭제
+                        </DropdownMenuItem>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>수입 삭제</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            정말로 이 수입을 삭제하시겠습니까?
+                            <br />이 작업은 되돌릴 수 없습니다.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>취소</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => handleDelete(income.id)}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          >
+                            삭제
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function DateExpenseDrawer({
   open,
   onOpenChange,
   selectedDate,
-  selectedMonth,
+  expenses,
+  bookId,
+  onExpenseUpdate,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   selectedDate: Date | null;
-  selectedMonth: Date;
+  expenses: ExpenseItem[];
+  bookId: string | null;
+  onExpenseUpdate: (bookId: string) => void;
 }) {
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   if (!selectedDate) return null;
 
-  const allExpenses = generateExpenseItems(30, selectedMonth);
   const dateKey = selectedDate.toISOString().split("T")[0];
-  const dateExpenses = allExpenses.filter(
-    (expense) => expense.date.toISOString().split("T")[0] === dateKey
+  const dateExpenses = expenses.filter(
+    (expense) => new Date(expense.date).toISOString().split("T")[0] === dateKey
   );
   const totals = calculateDailyTotals(dateExpenses);
 
   // 시간순 정렬
   const sortedExpenses = [...dateExpenses].sort((a, b) => {
-    const [aHour, aMinute] = a.time.split(":").map(Number);
-    const [bHour, bMinute] = b.time.split(":").map(Number);
-    if (aHour !== bHour) return bHour - aHour;
-    return bMinute - aMinute;
+    const aDate = new Date(a.createdAt).getTime();
+    const bDate = new Date(b.createdAt).getTime();
+    return bDate - aDate;
   });
+
+  const handleDelete = async (expenseId: string) => {
+    if (!bookId) {
+      toast.error("가계부를 찾을 수 없습니다.");
+      return;
+    }
+
+    setDeletingId(expenseId);
+
+    try {
+      const response = await fetch(`/api/book/${bookId}/expense/${expenseId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        let errorMessage = "지출 삭제에 실패했습니다.";
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          // JSON 파싱 실패 시 기본 메시지 사용
+        }
+        throw new Error(errorMessage);
+      }
+
+      // 응답이 성공이면 (200-299 범위) - 응답 본문이 없을 수도 있음
+      try {
+        await response.json();
+      } catch {
+        // 응답 본문이 없거나 파싱 실패해도 성공으로 처리
+      }
+
+      toast.success("지출이 삭제되었습니다.");
+      if (bookId) {
+        onExpenseUpdate(bookId);
+      }
+      onOpenChange(false);
+    } catch (error) {
+      console.error("지출 삭제 오류:", error);
+      toast.error(
+        error instanceof Error ? error.message : "지출 삭제에 실패했습니다."
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
@@ -703,39 +1284,112 @@ function DateExpenseDrawer({
               </div>
             ) : (
               sortedExpenses.map((expense) => {
-                const Icon = expense.category.icon;
+                const IconComponent = getIconComponent(expense.category.icon);
+                const expenseDate = new Date(expense.date);
+                const timeStr = expenseDate.toLocaleTimeString("ko-KR", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                });
+                const isDeleting = deletingId === expense.id;
+
                 return (
                   <div
                     key={expense.id}
                     className="flex items-center gap-4 p-3 rounded-lg bg-card hover:bg-accent/50 transition-colors"
                   >
                     <div className="flex items-center justify-center w-10 h-10 rounded-md bg-muted">
-                      <Icon className="h-5 w-5 text-muted-foreground" />
+                      {IconComponent ? (
+                        <IconComponent className="h-5 w-5 text-muted-foreground" />
+                      ) : (
+                        <span className="text-lg">
+                          {expense.category.icon || "📦"}
+                        </span>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="font-medium">
                           {expense.category.name}
                         </span>
-                        <span className="text-sm text-muted-foreground">
-                          {expense.paymentMethod}
-                        </span>
+                        {expense.description && (
+                          <span className="text-sm text-muted-foreground">
+                            {expense.description}
+                          </span>
+                        )}
                       </div>
                       <div className="text-sm text-muted-foreground">
-                        {expense.time}
+                        {timeStr}
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div
-                        className={`text-sm ${
-                          expense.type === "income"
-                            ? "text-blue-600 dark:text-blue-400"
-                            : "text-red-600 dark:text-red-400"
-                        }`}
-                      >
-                        {expense.type === "income" ? "+" : "-"}
-                        {expense.amount.toLocaleString()}원
+                    <div className="flex items-center gap-2">
+                      <div className="text-right">
+                        <div
+                          className={`text-sm ${
+                            expense.category.type === "income"
+                              ? "text-blue-600 dark:text-blue-400"
+                              : "text-red-600 dark:text-red-400"
+                          }`}
+                        >
+                          {expense.category.type === "income" ? "+" : "-"}
+                          {expense.amount.toLocaleString()}원
+                        </div>
                       </div>
+                      {expense.category.type === "expense" && bookId && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              disabled={isDeleting}
+                            >
+                              {isDeleting ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <MoreVertical className="h-4 w-4" />
+                              )}
+                              <span className="sr-only">메뉴</span>
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem asChild>
+                              <Link href={`/book/edit/${expense.id}`}>
+                                <Edit2 className="mr-2 h-4 w-4" />
+                                수정
+                              </Link>
+                            </DropdownMenuItem>
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <DropdownMenuItem
+                                  onSelect={(e) => e.preventDefault()}
+                                  className="text-destructive focus:text-destructive"
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4" />
+                                  삭제
+                                </DropdownMenuItem>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>지출 삭제</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    정말로 이 지출을 삭제하시겠습니까?
+                                    <br />이 작업은 되돌릴 수 없습니다.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>취소</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    onClick={() => handleDelete(expense.id)}
+                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                  >
+                                    삭제
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
                     </div>
                   </div>
                 );
@@ -761,14 +1415,301 @@ function DateExpenseDrawer({
 }
 
 export default function BookPage() {
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // URL 파라미터에서 초기값 읽기
+  const getInitialView = () => {
+    const view = searchParams.get("view");
+    return view === "calendar" ? "calendar" : "daily";
+  };
+
+  const getInitialSort = () => {
+    const sort = searchParams.get("sort");
+    const validSorts = [
+      "date-desc",
+      "date-asc",
+      "expense-amount-desc",
+      "expense-amount-asc",
+      "income-amount-desc",
+      "income-amount-asc",
+    ];
+    return validSorts.includes(sort || "") ? sort || "date-desc" : "date-desc";
+  };
+
+  const getInitialFilter = () => {
+    const filter = searchParams.get("filter");
+    const validFilters = ["all", "income", "expense"];
+    return validFilters.includes(filter || "") ? filter || "all" : "all";
+  };
+
+  const getInitialDate = () => {
+    const month = searchParams.get("month");
+    if (month) {
+      const [year, monthNum] = month.split("-").map(Number);
+      if (year && monthNum && monthNum >= 1 && monthNum <= 12) {
+        return new Date(year, monthNum - 1, 1);
+      }
+    }
+    return new Date();
+  };
+
+  const getInitialType = () => {
+    const type = searchParams.get("type");
+    return type === "income" ? "income" : "expense";
+  };
+
+  const [activeType, setActiveType] = useState<string>(getInitialType());
+  const [activeView, setActiveView] = useState<string>(getInitialView());
+  const [selectedDate, setSelectedDate] = useState<Date>(getInitialDate());
+  const [typeFilter, setTypeFilter] = useState<string>(getInitialFilter());
+  const [sortBy, setSortBy] = useState<string>(getInitialSort());
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | null>(
     null
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [bookId, setBookId] = useState<string | null>(null);
+  const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
+  const [incomes, setIncomes] = useState<IncomeItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // URL 파라미터 업데이트 함수
+  const updateURLParams = useCallback(
+    (updates: {
+      type?: string;
+      view?: string;
+      sort?: string;
+      filter?: string;
+      month?: string;
+    }) => {
+      const params = new URLSearchParams(searchParams.toString());
+
+      if (updates.type !== undefined) {
+        if (updates.type === "expense") {
+          params.delete("type");
+        } else {
+          params.set("type", updates.type);
+        }
+      }
+
+      if (updates.view !== undefined) {
+        if (updates.view === "daily") {
+          params.delete("view");
+        } else {
+          params.set("view", updates.view);
+        }
+      }
+
+      if (updates.sort !== undefined) {
+        if (updates.sort === "date-desc") {
+          params.delete("sort");
+        } else {
+          params.set("sort", updates.sort);
+        }
+      }
+
+      if (updates.filter !== undefined) {
+        if (updates.filter === "all") {
+          params.delete("filter");
+        } else {
+          params.set("filter", updates.filter);
+        }
+      }
+
+      if (updates.month !== undefined) {
+        const now = new Date();
+        const currentMonth = `${now.getFullYear()}-${String(
+          now.getMonth() + 1
+        ).padStart(2, "0")}`;
+        if (updates.month === currentMonth) {
+          params.delete("month");
+        } else {
+          params.set("month", updates.month);
+        }
+      }
+
+      const newUrl = params.toString()
+        ? `${window.location.pathname}?${params.toString()}`
+        : window.location.pathname;
+      router.replace(newUrl, { scroll: false });
+    },
+    [router, searchParams]
+  );
+
+  // 상태 변경 핸들러
+  const handleTypeChange = (type: string) => {
+    setActiveType(type);
+    updateURLParams({ type });
+  };
+
+  const handleViewChange = (view: string) => {
+    setActiveView(view);
+    updateURLParams({ view });
+  };
+
+  const handleFilterChange = (filter: string) => {
+    setTypeFilter(filter);
+    updateURLParams({ filter });
+  };
+
+  const handleSortChange = (sort: string) => {
+    setSortBy(sort);
+    updateURLParams({ sort });
+  };
 
   const handleDateChange = (date: Date) => {
     setSelectedDate(date);
+    const monthStr = `${date.getFullYear()}-${String(
+      date.getMonth() + 1
+    ).padStart(2, "0")}`;
+    updateURLParams({ month: monthStr });
+  };
+
+  // URL 파라미터 변경 시 상태 동기화
+  useEffect(() => {
+    const type = searchParams.get("type");
+    const view = searchParams.get("view");
+    const sort = searchParams.get("sort");
+    const filter = searchParams.get("filter");
+    const month = searchParams.get("month");
+
+    if (type === "income" || type === "expense") {
+      setActiveType(type);
+    }
+
+    if (view === "calendar" || view === "daily") {
+      setActiveView(view);
+    }
+
+    if (sort) {
+      const validSorts = [
+        "date-desc",
+        "date-asc",
+        "expense-amount-desc",
+        "expense-amount-asc",
+        "income-amount-desc",
+        "income-amount-asc",
+      ];
+      if (validSorts.includes(sort)) {
+        setSortBy(sort);
+      }
+    } else {
+      setSortBy("date-desc");
+    }
+
+    if (filter) {
+      const validFilters = ["all", "income", "expense"];
+      if (validFilters.includes(filter)) {
+        setTypeFilter(filter);
+      }
+    } else {
+      setTypeFilter("all");
+    }
+
+    if (month) {
+      const [year, monthNum] = month.split("-").map(Number);
+      if (year && monthNum && monthNum >= 1 && monthNum <= 12) {
+        const newDate = new Date(year, monthNum - 1, 1);
+        setSelectedDate(newDate);
+      }
+    }
+  }, [searchParams]);
+
+  // 가계부 ID 및 지출 목록 로드
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        // 개인 가계부 목록 조회
+        const booksResponse = await fetch("/api/book");
+        if (!booksResponse.ok) {
+          throw new Error("가계부 목록 조회에 실패했습니다.");
+        }
+        const booksData = await booksResponse.json();
+        const personalBook = booksData.books?.[0]; // 첫 번째 개인 가계부 사용
+
+        if (!personalBook) {
+          toast.error("가계부를 찾을 수 없습니다.");
+          return;
+        }
+
+        setBookId(personalBook.id);
+        await loadExpenses(personalBook.id);
+        await loadIncomes(personalBook.id);
+      } catch (error) {
+        console.error("데이터 로드 오류:", error);
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "데이터를 불러오는데 실패했습니다."
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadData();
+  }, []);
+
+  // 선택된 월이 변경될 때 지출/수입 목록 다시 로드
+  useEffect(() => {
+    if (bookId) {
+      loadExpenses(bookId);
+      loadIncomes(bookId);
+    }
+  }, [selectedDate, bookId, activeType]);
+
+  const loadExpenses = async (id: string) => {
+    try {
+      const year = selectedDate.getFullYear();
+      const month = selectedDate.getMonth();
+      const startDate = new Date(year, month, 1);
+      const endDate = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+      const response = await fetch(
+        `/api/book/${id}/expense?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
+      );
+
+      if (!response.ok) {
+        throw new Error("지출 목록 조회에 실패했습니다.");
+      }
+
+      const data = await response.json();
+      setExpenses(data.expenses || []);
+    } catch (error) {
+      console.error("지출 목록 로드 오류:", error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "지출 목록을 불러오는데 실패했습니다."
+      );
+    }
+  };
+
+  const loadIncomes = async (id: string) => {
+    try {
+      const year = selectedDate.getFullYear();
+      const month = selectedDate.getMonth();
+      const startDate = new Date(year, month, 1);
+      const endDate = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+      const response = await fetch(
+        `/api/book/${id}/income?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
+      );
+
+      if (!response.ok) {
+        throw new Error("수입 목록 조회에 실패했습니다.");
+      }
+
+      const data = await response.json();
+      setIncomes(data.incomes || []);
+    } catch (error) {
+      console.error("수입 목록 로드 오류:", error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "수입 목록을 불러오는데 실패했습니다."
+      );
+    }
   };
 
   const handleCalendarDateSelect = (date: Date) => {
@@ -780,36 +1721,73 @@ export default function BookPage() {
     <AppLayout
       breadcrumbs={[{ label: "홈", href: "/home" }, { label: "가계부" }]}
     >
-      <Tabs defaultValue="daily">
+      <Tabs value={activeType} onValueChange={handleTypeChange}>
         <div className="flex items-center justify-between mb-4">
           <MonthSelector
             selectedDate={selectedDate}
             onDateChange={handleDateChange}
           />
           <TabsList>
-            <TabsTrigger value="daily">일별</TabsTrigger>
-            <TabsTrigger value="calendar">캘린더</TabsTrigger>
+            <TabsTrigger value="expense">지출</TabsTrigger>
+            <TabsTrigger value="income">수입</TabsTrigger>
           </TabsList>
         </div>
 
-        <MonthlySummaryCard selectedMonth={selectedDate} />
+        {activeType === "expense" && (
+          <>
+            <MonthlySummaryCard expenses={expenses} incomes={incomes} />
+            <Tabs value={activeView} onValueChange={handleViewChange}>
+              <div className="flex items-center justify-end mb-4">
+                <TabsList>
+                  <TabsTrigger value="daily">일별</TabsTrigger>
+                  <TabsTrigger value="calendar">캘린더</TabsTrigger>
+                </TabsList>
+              </div>
 
-        <TabsContent value="daily">
-          <DailyExpenseList selectedMonth={selectedDate} />
-        </TabsContent>
-        <TabsContent value="calendar">
-          <CalendarPricing
-            month={selectedDate}
-            onDateSelect={handleCalendarDateSelect}
+              <TabsContent value="daily">
+                <DailyExpenseList
+                  selectedMonth={selectedDate}
+                  expenses={expenses}
+                  incomes={incomes}
+                  isLoading={isLoading}
+                  bookId={bookId}
+                  onExpenseUpdate={loadExpenses}
+                  onIncomeUpdate={loadIncomes}
+                  typeFilter={typeFilter}
+                  sortBy={sortBy}
+                  onFilterChange={handleFilterChange}
+                  onSortChange={handleSortChange}
+                />
+              </TabsContent>
+              <TabsContent value="calendar">
+                <ExpenseCalendar
+                  month={selectedDate}
+                  expenses={expenses}
+                  onDateSelect={handleCalendarDateSelect}
+                />
+              </TabsContent>
+            </Tabs>
+          </>
+        )}
+
+        {activeType === "income" && (
+          <IncomeList
+            selectedMonth={selectedDate}
+            incomes={incomes.filter((income) => income.period !== null)}
+            isLoading={isLoading}
+            bookId={bookId}
+            onIncomeUpdate={loadIncomes}
           />
-        </TabsContent>
+        )}
       </Tabs>
 
       <DateExpenseDrawer
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
         selectedDate={selectedCalendarDate}
-        selectedMonth={selectedDate}
+        expenses={expenses}
+        bookId={bookId}
+        onExpenseUpdate={loadExpenses}
       />
 
       {/* Floating Action Button */}

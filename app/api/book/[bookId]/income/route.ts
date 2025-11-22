@@ -1,0 +1,455 @@
+import { createServerSupabaseClient } from '@/lib/supabase/server'
+import { db } from '@/lib/db'
+import { incomes, books, categories } from '@/lib/db/schema'
+import { eq, and, gte, lte, desc, or, isNull, isNotNull } from 'drizzle-orm'
+import { NextResponse } from 'next/server'
+
+/**
+ * 수입 목록 조회 API
+ * GET /api/book/[bookId]/income?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&incomeType=actual|transfer
+ * 
+ * 특정 가계부의 수입 목록을 조회합니다.
+ * 쿼리 파라미터로 기간 및 수입 타입 필터링 가능합니다.
+ */
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ bookId: string }> }
+) {
+  try {
+    const supabase = await createServerSupabaseClient()
+    
+    // 현재 사용자 세션 확인
+    const {
+      data: { user: authUser },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !authUser) {
+      return NextResponse.json(
+        { error: '인증되지 않은 사용자입니다.' },
+        { status: 401 }
+      )
+    }
+
+    const { bookId } = await params
+
+    // 가계부 소유권 확인
+    const [book] = await db
+      .select()
+      .from(books)
+      .where(
+        and(
+          eq(books.id, bookId),
+          eq(books.ownerId, authUser.id)
+        )
+      )
+      .limit(1)
+
+    if (!book) {
+      return NextResponse.json(
+        { error: '가계부를 찾을 수 없거나 접근 권한이 없습니다.' },
+        { status: 404 }
+      )
+    }
+
+    // 쿼리 파라미터 추출
+    const { searchParams } = new URL(request.url)
+    const startDateParam = searchParams.get('startDate')
+    const endDateParam = searchParams.get('endDate')
+    const incomeTypeParam = searchParams.get('incomeType')
+
+    // 날짜 파싱 및 검증
+    let startDate: Date | null = null
+    let endDate: Date | null = null
+
+    if (startDateParam) {
+      startDate = new Date(startDateParam)
+      if (isNaN(startDate.getTime())) {
+        return NextResponse.json(
+          { error: '잘못된 시작 날짜 형식입니다.' },
+          { status: 400 }
+        )
+      }
+    }
+
+    if (endDateParam) {
+      endDate = new Date(endDateParam)
+      if (isNaN(endDate.getTime())) {
+        return NextResponse.json(
+          { error: '잘못된 종료 날짜 형식입니다.' },
+          { status: 400 }
+        )
+      }
+      // endDate는 해당 날짜의 23:59:59까지 포함하도록 설정
+      endDate.setHours(23, 59, 59, 999)
+    }
+
+    // 수입 타입 검증
+    if (incomeTypeParam && incomeTypeParam !== 'actual' && incomeTypeParam !== 'transfer') {
+      return NextResponse.json(
+        { error: '수입 타입은 actual 또는 transfer여야 합니다.' },
+        { status: 400 }
+      )
+    }
+
+    // 수입 조회 조건 구성
+    const whereConditions = [eq(incomes.bookId, bookId)]
+
+    // 기간 필터링: 단일 거래(date)와 반복 수입(startDate/endDate) 모두 고려
+    if (startDate || endDate) {
+      if (startDate && endDate) {
+        // 두 날짜 모두 있는 경우:
+        // 1. 단일 거래: date가 기간 내에 있는 경우
+        // 2. 반복 수입: 기간이 겹치는 경우
+        whereConditions.push(
+          or(
+            // 단일 거래 (date가 기간 내)
+            and(
+              isNull(incomes.period), // period가 null이면 단일 거래
+              gte(incomes.date, startDate),
+              lte(incomes.date, endDate)
+            ),
+            // 반복 수입 (기간이 겹침)
+            and(
+              isNotNull(incomes.period), // period가 있으면 반복 수입
+              lte(incomes.startDate, endDate),
+              or(
+                gte(incomes.endDate, startDate),
+                isNull(incomes.endDate)
+              )
+            )
+          )
+        )
+      } else if (startDate) {
+        // startDate만 있는 경우
+        whereConditions.push(
+          or(
+            // 단일 거래: startDate 이후
+            and(
+              isNull(incomes.period),
+              gte(incomes.date, startDate)
+            ),
+            // 반복 수입: startDate 이후에 시작하거나 아직 종료되지 않음
+            and(
+              isNotNull(incomes.period),
+              or(
+                gte(incomes.startDate, startDate),
+                isNull(incomes.endDate)
+              )
+            )
+          )
+        )
+      } else if (endDate) {
+        // endDate만 있는 경우
+        whereConditions.push(
+          or(
+            // 단일 거래: endDate 이전
+            and(
+              isNull(incomes.period),
+              lte(incomes.date, endDate)
+            ),
+            // 반복 수입: endDate 이전에 시작
+            and(
+              isNotNull(incomes.period),
+              lte(incomes.startDate, endDate)
+            )
+          )
+        )
+      }
+    }
+
+    if (incomeTypeParam) {
+      whereConditions.push(eq(incomes.incomeType, incomeTypeParam))
+    }
+
+    // 수입 목록 조회 (카테고리 정보 포함)
+    // categoryId가 null일 수 있으므로 조건부 조인
+    const incomeList = await db
+      .select({
+        id: incomes.id,
+        bookId: incomes.bookId,
+        categoryId: incomes.categoryId,
+        category: {
+          id: categories.id,
+          name: categories.name,
+          icon: categories.icon,
+          type: categories.type,
+        },
+        amount: incomes.amount,
+        period: incomes.period,
+        source: incomes.source,
+        incomeType: incomes.incomeType,
+        transferredFromBookId: incomes.transferredFromBookId,
+        startDate: incomes.startDate,
+        endDate: incomes.endDate,
+        createdAt: incomes.createdAt,
+        updatedAt: incomes.updatedAt,
+      })
+      .from(incomes)
+      .leftJoin(categories, eq(incomes.categoryId, categories.id))
+      .where(and(...whereConditions))
+      .orderBy(desc(incomes.startDate), desc(incomes.createdAt))
+
+    return NextResponse.json({
+      incomes: incomeList,
+    })
+  } catch (error) {
+    console.error('수입 목록 조회 오류:', error)
+    return NextResponse.json(
+      { error: '수입 목록 조회 중 오류가 발생했습니다.' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * 수입 추가 API
+ * POST /api/book/[bookId]/income
+ * 
+ * 새로운 수입을 추가합니다.
+ */
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ bookId: string }> }
+) {
+  try {
+    const supabase = await createServerSupabaseClient()
+    
+    // 현재 사용자 세션 확인
+    const {
+      data: { user: authUser },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    if (authError || !authUser) {
+      return NextResponse.json(
+        { error: '인증되지 않은 사용자입니다.' },
+        { status: 401 }
+      )
+    }
+
+    const { bookId } = await params
+
+    // 가계부 소유권 확인
+    const [book] = await db
+      .select()
+      .from(books)
+      .where(
+        and(
+          eq(books.id, bookId),
+          eq(books.ownerId, authUser.id)
+        )
+      )
+      .limit(1)
+
+    if (!book) {
+      return NextResponse.json(
+        { error: '가계부를 찾을 수 없거나 접근 권한이 없습니다.' },
+        { status: 404 }
+      )
+    }
+
+    // 요청 본문 파싱
+    const body = await request.json()
+    const { categoryId, amount, date, period, source, incomeType, startDate, endDate, transferredFromBookId } = body
+
+    // 유효성 검사
+    if (!categoryId || typeof categoryId !== 'string') {
+      return NextResponse.json(
+        { error: '카테고리는 필수입니다.' },
+        { status: 400 }
+      )
+    }
+
+    if (!amount || typeof amount !== 'number' || amount <= 0) {
+      return NextResponse.json(
+        { error: '금액은 0보다 큰 숫자여야 합니다.' },
+        { status: 400 }
+      )
+    }
+
+    // 단일 거래 vs 반복 수입 구분
+    const isSingleTransaction = !!date && !period && !startDate
+    const isRecurringIncome = !!period && !!startDate && !date
+
+    if (!isSingleTransaction && !isRecurringIncome) {
+      return NextResponse.json(
+        { error: '단일 거래(date) 또는 반복 수입(period, startDate) 중 하나를 선택해야 합니다.' },
+        { status: 400 }
+      )
+    }
+
+    // 카테고리 확인 (해당 가계부에 속하는지)
+    const [category] = await db
+      .select()
+      .from(categories)
+      .where(
+        and(
+          eq(categories.id, categoryId),
+          eq(categories.bookId, bookId),
+          eq(categories.type, 'income') // 수입 카테고리만 허용
+        )
+      )
+      .limit(1)
+
+    if (!category) {
+      return NextResponse.json(
+        { error: '카테고리를 찾을 수 없거나 해당 가계부에 속하지 않습니다.' },
+        { status: 404 }
+      )
+    }
+
+    const finalIncomeType = incomeType || 'actual'
+    if (finalIncomeType !== 'actual' && finalIncomeType !== 'transfer') {
+      return NextResponse.json(
+        { error: '수입 타입은 actual 또는 transfer여야 합니다.' },
+        { status: 400 }
+      )
+    }
+
+    // 단일 거래인 경우
+    let incomeDate: Date | null = null
+    if (isSingleTransaction) {
+      incomeDate = new Date(date)
+      if (isNaN(incomeDate.getTime())) {
+        return NextResponse.json(
+          { error: '잘못된 날짜 형식입니다.' },
+          { status: 400 }
+        )
+      }
+    }
+
+    // 반복 수입인 경우
+    let incomeStartDate: Date | null = null
+    let incomeEndDate: Date | null = null
+    if (isRecurringIncome) {
+      if (!period || (period !== 'monthly' && period !== 'yearly')) {
+        return NextResponse.json(
+          { error: '반복 수입인 경우 기간(monthly 또는 yearly)은 필수입니다.' },
+          { status: 400 }
+        )
+      }
+
+      if (!startDate) {
+        return NextResponse.json(
+          { error: '반복 수입인 경우 시작 날짜는 필수입니다.' },
+          { status: 400 }
+        )
+      }
+
+      incomeStartDate = new Date(startDate)
+      if (isNaN(incomeStartDate.getTime())) {
+        return NextResponse.json(
+          { error: '잘못된 시작 날짜 형식입니다.' },
+          { status: 400 }
+        )
+      }
+
+      if (endDate) {
+        incomeEndDate = new Date(endDate)
+        if (isNaN(incomeEndDate.getTime())) {
+          return NextResponse.json(
+            { error: '잘못된 종료 날짜 형식입니다.' },
+            { status: 400 }
+          )
+        }
+        if (incomeEndDate < incomeStartDate) {
+          return NextResponse.json(
+            { error: '종료 날짜는 시작 날짜보다 빠를 수 없습니다.' },
+            { status: 400 }
+          )
+        }
+      }
+    }
+
+    // 이체인 경우 출처 가계부 확인
+    if (finalIncomeType === 'transfer' && transferredFromBookId) {
+      const [transferredFromBook] = await db
+        .select()
+        .from(books)
+        .where(
+          and(
+            eq(books.id, transferredFromBookId),
+            eq(books.ownerId, authUser.id)
+          )
+        )
+        .limit(1)
+
+      if (!transferredFromBook) {
+        return NextResponse.json(
+          { error: '출처 가계부를 찾을 수 없거나 접근 권한이 없습니다.' },
+          { status: 404 }
+        )
+      }
+    }
+
+    // 수입 생성
+    const [newIncome] = await db
+      .insert(incomes)
+      .values({
+        bookId,
+        categoryId,
+        amount: Math.round(amount), // 소수점 제거
+        date: incomeDate, // 단일 거래 날짜 (nullable)
+        period: isRecurringIncome ? period : null, // 반복 주기 (nullable)
+        source: source?.trim() || null, // 선택사항
+        incomeType: finalIncomeType,
+        transferredFromBookId: finalIncomeType === 'transfer' ? transferredFromBookId || null : null,
+        startDate: incomeStartDate, // 반복 수입 시작일 (nullable)
+        endDate: incomeEndDate, // 반복 수입 종료일 (nullable)
+        updatedAt: new Date(),
+      })
+      .returning({
+        id: incomes.id,
+        bookId: incomes.bookId,
+        categoryId: incomes.categoryId,
+        amount: incomes.amount,
+        date: incomes.date,
+        period: incomes.period,
+        source: incomes.source,
+        incomeType: incomes.incomeType,
+        transferredFromBookId: incomes.transferredFromBookId,
+        startDate: incomes.startDate,
+        endDate: incomes.endDate,
+        createdAt: incomes.createdAt,
+        updatedAt: incomes.updatedAt,
+      })
+
+    if (!newIncome) {
+      return NextResponse.json(
+        { error: '수입 추가에 실패했습니다.' },
+        { status: 500 }
+      )
+    }
+
+    // 카테고리 정보 포함하여 반환
+    return NextResponse.json(
+      {
+        ...newIncome,
+        category: {
+          id: category.id,
+          name: category.name,
+          icon: category.icon,
+          type: category.type,
+        },
+      },
+      { status: 201 }
+    )
+  } catch (error) {
+    console.error('수입 추가 오류:', error)
+    
+    // JSON 파싱 오류 처리
+    if (error instanceof SyntaxError) {
+      return NextResponse.json(
+        { error: '잘못된 요청 형식입니다.' },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json(
+      { error: '수입 추가 중 오류가 발생했습니다.' },
+      { status: 500 }
+    )
+  }
+}
+
