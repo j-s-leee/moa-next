@@ -42,8 +42,14 @@ export async function GET(request: NextRequest) {
                       data.user.user_metadata?.name || 
                       data.user.user_metadata?.kakao_account?.profile?.nickname ||
                       null
+          
+          // OAuth 제공자에서 아바타 URL 가져오기
+          const avatarUrl = data.user.user_metadata?.avatar_url ||
+                           data.user.user_metadata?.picture ||
+                           data.user.user_metadata?.kakao_account?.profile?.profile_image_url ||
+                           null
 
-          await onUserSignUp(data.user.id, email, name)
+          await onUserSignUp(data.user.id, email, name, avatarUrl)
         }
       } catch (seedError) {
         console.error('시드 데이터 생성 실패:', seedError)
