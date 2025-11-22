@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { AppLayout } from "@/components/app-layout";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Calendar } from "@/components/ui/calendar";
@@ -20,18 +19,30 @@ import {
   ChevronDownIcon,
   Settings,
   Loader2,
+  Trash2,
 } from "lucide-react";
 import * as LucideIcons from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 // 카테고리 타입 정의
 interface Category {
@@ -44,6 +55,48 @@ interface Category {
   autoDetectedType: "fixed" | "variable" | null;
   lastTypeCheckDate: string | null;
   order: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// 지출 타입 정의
+interface Expense {
+  id: string;
+  bookId: string;
+  categoryId: string;
+  category: {
+    id: string;
+    name: string;
+    icon: string | null;
+    type: "expense" | "income";
+  };
+  amount: number;
+  date: string;
+  description: string | null;
+  userId: string;
+  budgetId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// 수입 타입 정의
+interface Income {
+  id: string;
+  bookId: string;
+  categoryId: string | null;
+  category?: {
+    id: string;
+    name: string;
+    icon: string | null;
+    type: "expense" | "income";
+  };
+  amount: number;
+  period: "monthly" | "yearly";
+  source: string | null;
+  incomeType: "actual" | "transfer";
+  transferredFromBookId: string | null;
+  startDate: string;
+  endDate: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -160,19 +213,73 @@ function CategoryDrawer({
 
 function ExpenseForm({
   bookId,
+  expenseId,
   categories,
   onSave,
+  onDelete,
 }: {
   bookId: string | null;
+  expenseId: string;
   categories: Category[];
   onSave: () => void;
+  onDelete: () => void;
 }) {
+  const router = useRouter();
   const [memo, setMemo] = useState("");
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState<Date | undefined>(new Date());
+  const [date, setDate] = useState<Date | undefined>(undefined);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // 기존 지출 데이터 로드
+  useEffect(() => {
+    const loadExpense = async () => {
+      if (!bookId) return;
+
+      try {
+        // 최근 1년치 지출을 조회하여 해당 지출 찾기
+        const now = new Date();
+        const startDate = new Date(now.getFullYear() - 1, 0, 1);
+        const endDate = new Date(now.getFullYear() + 1, 11, 31, 23, 59, 59, 999);
+
+        const response = await fetch(
+          `/api/book/${bookId}/expense?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
+        );
+        if (!response.ok) {
+          throw new Error("지출 조회에 실패했습니다.");
+        }
+
+        const data = await response.json();
+        const expense = data.expenses?.find(
+          (e: Expense) => e.id === expenseId
+        );
+
+        if (!expense) {
+          toast.error("지출을 찾을 수 없습니다.");
+          router.push("/book");
+          return;
+        }
+
+        setCategoryId(expense.categoryId);
+        setAmount(expense.amount.toString());
+        setDate(new Date(expense.date));
+        setMemo(expense.description || "");
+      } catch (error) {
+        console.error("지출 로드 오류:", error);
+        toast.error(
+          error instanceof Error ? error.message : "지출을 불러오는데 실패했습니다."
+        );
+        router.push("/book");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadExpense();
+  }, [bookId, expenseId, router]);
 
   const selectedCategory = categories.find((cat) => cat.id === categoryId);
   const IconComponent = selectedCategory
@@ -203,8 +310,8 @@ function ExpenseForm({
     setIsSaving(true);
 
     try {
-      const response = await fetch(`/api/book/${bookId}/expense`, {
-        method: "POST",
+      const response = await fetch(`/api/book/${bookId}/expense/${expenseId}`, {
+        method: "PUT",
         headers: {
           "Content-Type": "application/json",
         },
@@ -218,20 +325,61 @@ function ExpenseForm({
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || "지출 추가에 실패했습니다.");
+        throw new Error(error.error || "지출 수정에 실패했습니다.");
       }
 
-      toast.success("지출이 추가되었습니다.");
+      toast.success("지출이 수정되었습니다.");
       onSave();
     } catch (error) {
-      console.error("지출 추가 오류:", error);
+      console.error("지출 수정 오류:", error);
       toast.error(
-        error instanceof Error ? error.message : "지출 추가에 실패했습니다."
+        error instanceof Error ? error.message : "지출 수정에 실패했습니다."
       );
     } finally {
       setIsSaving(false);
     }
   };
+
+  const handleDelete = async () => {
+    if (!bookId) {
+      toast.error("가계부를 찾을 수 없습니다.");
+      return;
+    }
+
+    setIsDeleting(true);
+
+    try {
+      const response = await fetch(`/api/book/${bookId}/expense/${expenseId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "지출 삭제에 실패했습니다.");
+      }
+
+      // 응답이 성공이면 (200-299 범위)
+      await response.json().catch(() => ({ success: true }));
+      
+      toast.success("지출이 삭제되었습니다.");
+      onDelete();
+    } catch (error) {
+      console.error("지출 삭제 오류:", error);
+      toast.error(
+        error instanceof Error ? error.message : "지출 삭제에 실패했습니다."
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -315,47 +463,147 @@ function ExpenseForm({
         />
       </div>
 
-      <Button
-        onClick={handleSave}
-        disabled={isSaving}
-        className="w-full"
-      >
-        {isSaving ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            저장 중...
-          </>
-        ) : (
-          "저장"
-        )}
-      </Button>
+      <div className="flex gap-2">
+        <Button
+          onClick={handleSave}
+          disabled={isSaving}
+          className="flex-1"
+        >
+          {isSaving ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              저장 중...
+            </>
+          ) : (
+            "저장"
+          )}
+        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant="destructive"
+              disabled={isDeleting}
+              className="flex-1"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  삭제 중...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  삭제
+                </>
+              )}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>지출 삭제</AlertDialogTitle>
+              <AlertDialogDescription>
+                정말로 이 지출을 삭제하시겠습니까?
+                <br />
+                이 작업은 되돌릴 수 없습니다.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>취소</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDelete}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                삭제
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
     </div>
   );
 }
 
 function IncomeForm({
   bookId,
+  incomeId,
   categories,
   onSave,
+  onDelete,
 }: {
   bookId: string | null;
+  incomeId: string;
   categories: Category[];
   onSave: () => void;
+  onDelete: () => void;
 }) {
+  const router = useRouter();
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [period, setPeriod] = useState<"monthly" | "yearly">("monthly");
-  const [startDate, setStartDate] = useState<Date | undefined>(new Date());
+  const [startDate, setStartDate] = useState<Date | undefined>(undefined);
   const [endDate, setEndDate] = useState<Date | undefined>(undefined);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [endDateCalendarOpen, setEndDateCalendarOpen] = useState(false);
   const [hasEndDate, setHasEndDate] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const selectedCategory = categories.find((cat) => cat.id === categoryId);
   const IconComponent = selectedCategory
     ? ((LucideIcons as any)[selectedCategory.icon || ""] as LucideIcon) || null
     : null;
+
+  // 기존 수입 데이터 로드
+  useEffect(() => {
+    const loadIncome = async () => {
+      if (!bookId) return;
+
+      try {
+        // 최근 1년치 수입을 조회하여 해당 수입 찾기
+        const now = new Date();
+        const startDate = new Date(now.getFullYear() - 1, 0, 1);
+        const endDate = new Date(now.getFullYear() + 1, 11, 31, 23, 59, 59, 999);
+
+        const response = await fetch(
+          `/api/book/${bookId}/income?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
+        );
+        if (!response.ok) {
+          throw new Error("수입 조회에 실패했습니다.");
+        }
+
+        const data = await response.json();
+        const income = data.incomes?.find(
+          (i: Income & { category?: { id: string; name: string; icon: string | null; type: string } }) => i.id === incomeId
+        );
+
+        if (!income) {
+          toast.error("수입을 찾을 수 없습니다.");
+          router.push("/book?type=income");
+          return;
+        }
+
+        setCategoryId(income.categoryId || (income as any).category?.id || null);
+        setAmount(income.amount.toString());
+        setPeriod(income.period);
+        setStartDate(new Date(income.startDate));
+        if (income.endDate) {
+          setEndDate(new Date(income.endDate));
+          setHasEndDate(true);
+        }
+      } catch (error) {
+        console.error("수입 로드 오류:", error);
+        toast.error(
+          error instanceof Error ? error.message : "수입을 불러오는데 실패했습니다."
+        );
+        router.push("/book?type=income");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadIncome();
+  }, [bookId, incomeId, router]);
 
   const handleSave = async () => {
     if (!bookId) {
@@ -381,8 +629,8 @@ function IncomeForm({
     setIsSaving(true);
 
     try {
-      const response = await fetch(`/api/book/${bookId}/income`, {
-        method: "POST",
+      const response = await fetch(`/api/book/${bookId}/income/${incomeId}`, {
+        method: "PUT",
         headers: {
           "Content-Type": "application/json",
         },
@@ -399,20 +647,60 @@ function IncomeForm({
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || "수입 추가에 실패했습니다.");
+        throw new Error(error.error || "수입 수정에 실패했습니다.");
       }
 
-      toast.success("수입이 추가되었습니다.");
+      toast.success("수입이 수정되었습니다.");
       onSave();
     } catch (error) {
-      console.error("수입 추가 오류:", error);
+      console.error("수입 수정 오류:", error);
       toast.error(
-        error instanceof Error ? error.message : "수입 추가에 실패했습니다."
+        error instanceof Error ? error.message : "수입 수정에 실패했습니다."
       );
     } finally {
       setIsSaving(false);
     }
   };
+
+  const handleDelete = async () => {
+    if (!bookId) {
+      toast.error("가계부를 찾을 수 없습니다.");
+      return;
+    }
+
+    setIsDeleting(true);
+
+    try {
+      const response = await fetch(`/api/book/${bookId}/income/${incomeId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "수입 삭제에 실패했습니다.");
+      }
+
+      await response.json().catch(() => ({ success: true }));
+      
+      toast.success("수입이 삭제되었습니다.");
+      onDelete();
+    } catch (error) {
+      console.error("수입 삭제 오류:", error);
+      toast.error(
+        error instanceof Error ? error.message : "수입 삭제에 실패했습니다."
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -552,26 +840,72 @@ function IncomeForm({
         )}
       </div>
 
-      <Button
-        onClick={handleSave}
-        disabled={isSaving}
-        className="w-full"
-      >
-        {isSaving ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            저장 중...
-          </>
-        ) : (
-          "저장"
-        )}
-      </Button>
+      <div className="flex gap-2">
+        <Button
+          onClick={handleSave}
+          disabled={isSaving}
+          className="flex-1"
+        >
+          {isSaving ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              저장 중...
+            </>
+          ) : (
+            "저장"
+          )}
+        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant="destructive"
+              disabled={isDeleting}
+              className="flex-1"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  삭제 중...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  삭제
+                </>
+              )}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>수입 삭제</AlertDialogTitle>
+              <AlertDialogDescription>
+                정말로 이 수입을 삭제하시겠습니까?
+                <br />
+                이 작업은 되돌릴 수 없습니다.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>취소</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDelete}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                삭제
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
     </div>
   );
 }
 
-export default function AddExpensePage() {
+export default function EditExpensePage() {
   const router = useRouter();
+  const params = useParams();
+  const searchParams = useSearchParams();
+  const itemId = params.id as string;
+  const type = searchParams.get("type") || "expense"; // 기본값: expense
   const [bookId, setBookId] = useState<string | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -596,7 +930,7 @@ export default function AddExpensePage() {
 
         setBookId(personalBook.id);
 
-        // 카테고리 목록 조회
+        // 카테고리 목록 조회 (지출/수입 모두)
         const categoriesResponse = await fetch(
           `/api/book/${personalBook.id}/category`
         );
@@ -616,16 +950,20 @@ export default function AddExpensePage() {
     };
 
     loadData();
-  }, [router]);
+  }, [router, type]);
 
   const handleSave = () => {
-    router.push("/book");
+    router.push(`/book?type=${type}`);
+  };
+
+  const handleDelete = () => {
+    router.push(`/book?type=${type}`);
   };
 
   if (isLoading) {
     return (
       <AppLayout
-        title="내역 추가"
+        title={type === "income" ? "수입 수정" : "지출 수정"}
         leftAction={
           <Button variant="ghost" size="icon" onClick={() => router.back()}>
             <ArrowLeft className="size-4" />
@@ -642,7 +980,7 @@ export default function AddExpensePage() {
 
   return (
     <AppLayout
-      title="내역 추가"
+      title={type === "income" ? "수입 수정" : "지출 수정"}
       leftAction={
         <Button variant="ghost" size="icon" onClick={() => router.back()}>
           <ArrowLeft className="size-4" />
@@ -650,20 +988,24 @@ export default function AddExpensePage() {
         </Button>
       }
     >
-      <div>
-        <Tabs defaultValue="expense">
-          <TabsList className="mx-auto">
-            <TabsTrigger value="income">수입</TabsTrigger>
-            <TabsTrigger value="expense">지출</TabsTrigger>
-          </TabsList>
-          <TabsContent value="income">
-            <IncomeForm bookId={bookId} categories={categories} onSave={handleSave} />
-          </TabsContent>
-          <TabsContent value="expense">
-            <ExpenseForm bookId={bookId} categories={categories} onSave={handleSave} />
-          </TabsContent>
-        </Tabs>
-      </div>
+      {type === "income" ? (
+        <IncomeForm
+          bookId={bookId}
+          incomeId={itemId}
+          categories={categories}
+          onSave={handleSave}
+          onDelete={handleDelete}
+        />
+      ) : (
+        <ExpenseForm
+          bookId={bookId}
+          expenseId={itemId}
+          categories={categories}
+          onSave={handleSave}
+          onDelete={handleDelete}
+        />
+      )}
     </AppLayout>
   );
 }
+

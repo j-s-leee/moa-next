@@ -8,6 +8,20 @@
       "when": 1763650124470,
       "tag": "0000_chief_hiroim",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1763807435970,
+      "tag": "0001_abnormal_king_cobra",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1763808210802,
+      "tag": "0002_unusual_warbound",
+      "breakpoints": true
     }
   ]
 }

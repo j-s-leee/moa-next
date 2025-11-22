@@ -38,7 +38,7 @@ const data = {
     },
     {
       title: "카테고리 관리",
-      url: "/book/category",
+      url: "/book/category", // 첫 번째 가계부로 자동 리다이렉트
       icon: ListChevronsUpDown,
     },
     {
