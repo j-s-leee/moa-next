@@ -95,17 +95,31 @@
 
 ### 2.1 Supabase 인증 설정
 
-- [ ] Supabase Auth 설정
-- [ ] 로그인 페이지 구현 (`app/login/page.tsx`)
-- [ ] 회원가입 페이지 구현 (`app/register/page.tsx`)
-- [ ] 인증 미들웨어 설정
-- [ ] 사용자 세션 관리
+- [x] Supabase Auth 설정
+- [x] 로그인 페이지 구현 (`app/login/page.tsx`) - OAuth 전용 (Google, Kakao)
+- [x] OAuth 콜백 처리 (`app/auth/callback/route.ts`)
+- [x] 인증 미들웨어 설정 (`middleware.ts`)
+- [x] 사용자 세션 관리
+- [x] OAuth 로그인 시 시드 데이터 자동 생성 연동
 
-**진척도**: 0% 완료
+**진척도**: 100% 완료 ✅
+
+**완료된 작업**:
+
+- OAuth 로그인 페이지 구현 완료 (Google, Kakao)
+- OAuth 콜백 처리 구현 완료
+- 인증 미들웨어 설정 완료 (보호된 경로 접근 제어)
+- 로그아웃 기능 구현 완료
+- OAuth 로그인 시 자동으로 사용자 프로필 및 개인 가계부 생성
+
+**주의사항**:
+
+- Supabase Dashboard에서 Google OAuth 제공자 설정 필요
+- Kakao OAuth는 Supabase에서 직접 지원하지 않으므로 Custom OAuth 설정 필요 (참고: `docs/SUPABASE_OAUTH_SETUP.md`)
+
+**다음 작업**: Phase 2.2 - 사용자 프로필 관리
 
 **우선순위**: 🔴 최우선
-
-**예상 작업 시간**: 4-6시간
 
 ### 2.2 사용자 프로필 관리
 
