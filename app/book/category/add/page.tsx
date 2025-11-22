@@ -1,13 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import * as React from "react";
 import { AppLayout } from "@/components/app-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { ArrowLeft, Check, Plus, type LucideIcon } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { ArrowLeft, Check, Plus, Loader2, type LucideIcon } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Drawer,
   DrawerContent,
@@ -17,8 +16,9 @@ import {
 } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
 import * as LucideIcons from "lucide-react";
+import { toast } from "sonner";
 
-// Lucide 아이콘 목록 (일부 주요 아이콘만 포함, 필요시 확장 가능)
+// Lucide 아이콘 목록
 const iconNames = [
   "UtensilsCrossed",
   "ShoppingCart",
@@ -111,10 +111,8 @@ const iconNames = [
   "ChevronDown",
   "ChevronLeft",
   "ChevronRight",
-  "Plus",
   "Minus",
   "X",
-  "Check",
   "Edit",
   "Trash2",
   "Copy",
@@ -138,17 +136,14 @@ function IconDrawer({
   children,
 }: {
   selectedIconName: string | null;
-  onSelectIcon: (iconName: string, icon: LucideIcon) => void;
+  onSelectIcon: (iconName: string) => void;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
 
   const handleIconSelect = (iconName: IconName) => {
-    const Icon = (LucideIcons as any)[iconName] as LucideIcon | undefined;
-    if (Icon) {
-      onSelectIcon(iconName, Icon);
-      setOpen(false);
-    }
+    onSelectIcon(iconName);
+    setOpen(false);
   };
 
   return (
@@ -214,38 +209,101 @@ function IconDrawer({
 
 export default function AddCategoryPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const bookId = searchParams.get("bookId");
+  const typeParam = searchParams.get("type") as "expense" | "income" | null;
+
   const [categoryName, setCategoryName] = useState("");
   const [selectedIconName, setSelectedIconName] = useState<string | null>(null);
-  const [selectedIcon, setSelectedIcon] = useState<LucideIcon | null>(null);
+  const [categoryType, setCategoryType] = useState<"expense" | "income">(
+    typeParam || "expense"
+  );
+  const [isSaving, setIsSaving] = useState(false);
 
-  const handleIconSelect = (iconName: string, icon: LucideIcon) => {
+  useEffect(() => {
+    if (!bookId) {
+      toast.error("가계부 정보가 없습니다.");
+      router.push("/book/category");
+    }
+  }, [bookId, router]);
+
+  const handleIconSelect = (iconName: string) => {
     setSelectedIconName(iconName);
-    setSelectedIcon(icon);
   };
 
   const handleBack = () => {
-    // 부모 라우트로 이동
     router.push("/book/category");
   };
 
-  const handleSave = () => {
-    // TODO: 저장 로직 구현
-    console.log("저장", { categoryName, selectedIconName, selectedIcon });
-    router.push("/book/category");
+  const handleSave = async () => {
+    if (!bookId) {
+      toast.error("가계부 정보가 없습니다.");
+      return;
+    }
+
+    if (!categoryName.trim()) {
+      toast.error("카테고리 이름을 입력해주세요.");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const response = await fetch(`/api/book/${bookId}/category`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: categoryName.trim(),
+          icon: selectedIconName,
+          type: categoryType,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "카테고리 생성 실패");
+      }
+
+      toast.success("카테고리가 생성되었습니다.");
+      router.push("/book/category");
+    } catch (error) {
+      console.error("카테고리 생성 오류:", error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "카테고리 생성 중 오류가 발생했습니다."
+      );
+    } finally {
+      setIsSaving(false);
+    }
   };
+
+  const selectedIcon = selectedIconName
+    ? ((LucideIcons as any)[selectedIconName] as LucideIcon)
+    : null;
 
   return (
     <AppLayout
       title="카테고리 추가"
       leftAction={
-        <Button variant="ghost" size="icon" onClick={handleBack}>
+        <Button variant="ghost" size="icon" onClick={handleBack} disabled={isSaving}>
           <ArrowLeft className="size-4" />
           <span className="sr-only">뒤로가기</span>
         </Button>
       }
       rightAction={
-        <Button variant="ghost" size="icon" onClick={handleSave}>
-          <Check className="size-4" />
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleSave}
+          disabled={isSaving || !categoryName.trim()}
+        >
+          {isSaving ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Check className="size-4" />
+          )}
           <span className="sr-only">저장</span>
         </Button>
       }
@@ -258,11 +316,7 @@ export default function AddCategoryPage() {
           >
             <Button variant="outline" size="icon" className="size-12">
               {selectedIcon ? (
-                <>
-                  {React.createElement(selectedIcon, {
-                    className: "size-6",
-                  })}
-                </>
+                <selectedIcon className="size-6" />
               ) : (
                 <Plus className="size-6" />
               )}
@@ -274,7 +328,33 @@ export default function AddCategoryPage() {
             placeholder="카테고리명을 입력하세요"
             value={categoryName}
             onChange={(e) => setCategoryName(e.target.value)}
+            disabled={isSaving}
+            maxLength={50}
           />
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-sm font-medium">카테고리 타입</label>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant={categoryType === "expense" ? "default" : "outline"}
+              onClick={() => setCategoryType("expense")}
+              disabled={isSaving}
+              className="flex-1"
+            >
+              지출
+            </Button>
+            <Button
+              type="button"
+              variant={categoryType === "income" ? "default" : "outline"}
+              onClick={() => setCategoryType("income")}
+              disabled={isSaving}
+              className="flex-1"
+            >
+              수입
+            </Button>
+          </div>
         </div>
       </div>
     </AppLayout>
