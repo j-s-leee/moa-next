@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AppLayout } from "@/components/app-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,32 +20,33 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { ArrowLeft, Check, ChevronDown, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Loader2, type LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { UtensilsCrossed, ShoppingCart, Coffee, Home, Car } from "lucide-react";
+import { toast } from "sonner";
+import * as LucideIcons from "lucide-react";
 
-// 카테고리 데이터 (실제로는 카테고리 관리에서 가져와야 함)
-const expenseCategories: { id: string; name: string; icon: LucideIcon }[] = [
-  { id: "1", name: "식비", icon: UtensilsCrossed },
-  { id: "2", name: "쇼핑", icon: ShoppingCart },
-  { id: "3", name: "카페", icon: Coffee },
-  { id: "4", name: "주거", icon: Home },
-  { id: "5", name: "교통", icon: Car },
-];
+interface Category {
+  id: string;
+  name: string;
+  icon: string | null;
+  type: "expense" | "income";
+}
 
 function CategoryDrawer({
   selectedCategoryId,
   onSelectCategory,
+  categories,
   children,
 }: {
   selectedCategoryId: string | null;
   onSelectCategory: (categoryId: string) => void;
+  categories: Category[];
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
 
-  const selectedCategory = expenseCategories.find(
+  const selectedCategory = categories.find(
     (c) => c.id === selectedCategoryId
   );
 
@@ -58,8 +59,10 @@ function CategoryDrawer({
         </DrawerHeader>
         <div className="overflow-y-auto max-h-[60vh] px-4 pb-4">
           <div className="grid grid-cols-4 gap-3 pt-2">
-            {expenseCategories.map((category) => {
-              const Icon = category.icon;
+            {categories.map((category) => {
+              const IconComponent = category.icon
+                ? (LucideIcons[category.icon as keyof typeof LucideIcons] as LucideIcon)
+                : null;
               const isSelected = selectedCategoryId === category.id;
 
               return (
@@ -82,14 +85,18 @@ function CategoryDrawer({
                       isSelected ? "bg-primary-foreground/20" : "bg-muted"
                     )}
                   >
-                    <Icon
-                      className={cn(
-                        "h-6 w-6",
-                        isSelected
-                          ? "text-primary-foreground"
-                          : "text-muted-foreground"
-                      )}
-                    />
+                    {IconComponent ? (
+                      <IconComponent
+                        className={cn(
+                          "h-6 w-6",
+                          isSelected
+                            ? "text-primary-foreground"
+                            : "text-muted-foreground"
+                        )}
+                      />
+                    ) : (
+                      <span className="text-lg">{category.icon || "📦"}</span>
+                    )}
                   </div>
                   <span
                     className={cn(
@@ -111,6 +118,10 @@ function CategoryDrawer({
 
 export default function AddBudgetPage() {
   const router = useRouter();
+  const [bookId, setBookId] = useState<string | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [type, setType] = useState<"monthly" | "yearly">("monthly");
   const [categoryId, setCategoryId] = useState<string>("");
   const [amount, setAmount] = useState<string>("");
@@ -124,48 +135,139 @@ export default function AddBudgetPage() {
     new Date()
   );
 
-  const selectedCategory = expenseCategories.find((c) => c.id === categoryId);
+  // 가계부 ID 및 카테고리 로드
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        // 개인 가계부 목록 조회
+        const booksResponse = await fetch("/api/book");
+        if (!booksResponse.ok) {
+          throw new Error("가계부 목록 조회에 실패했습니다.");
+        }
+        const booksData = await booksResponse.json();
+        const personalBook = booksData.books?.[0]; // 첫 번째 개인 가계부 사용
 
-  const handleSave = () => {
+        if (!personalBook) {
+          toast.error("가계부를 찾을 수 없습니다.");
+          router.push("/book");
+          return;
+        }
+
+        setBookId(personalBook.id);
+
+        // 카테고리 목록 조회 (지출 카테고리만)
+        const categoriesResponse = await fetch(
+          `/api/book/${personalBook.id}/category?type=expense`
+        );
+        if (!categoriesResponse.ok) {
+          throw new Error("카테고리 목록 조회에 실패했습니다.");
+        }
+        const categoriesData = await categoriesResponse.json();
+        setCategories(categoriesData.categories || []);
+      } catch (error) {
+        console.error("데이터 로드 오류:", error);
+        toast.error(
+          error instanceof Error ? error.message : "데이터 로드에 실패했습니다."
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadData();
+  }, [router]);
+
+  const selectedCategory = categories.find((c) => c.id === categoryId);
+
+  const handleSave = async () => {
+    if (!bookId) {
+      toast.error("가계부를 찾을 수 없습니다.");
+      return;
+    }
+
     if (!categoryId || !amount) {
-      alert("카테고리와 금액을 입력해주세요.");
+      toast.error("카테고리와 금액을 입력해주세요.");
       return;
     }
 
     if (isRecurring && !startDate) {
-      alert("시작일을 선택해주세요.");
+      toast.error("시작일을 선택해주세요.");
       return;
     }
 
     if (!isRecurring && !specificDate) {
-      alert("기간을 선택해주세요.");
+      toast.error("기간을 선택해주세요.");
       return;
     }
 
-    const budget = {
-      id: Date.now().toString(),
-      categoryId,
-      type,
-      amount: Number(amount),
-      isRecurring,
-      ...(isRecurring
-        ? {
-            startYear: startDate!.getFullYear(),
-            startMonth:
-              type === "monthly" ? startDate!.getMonth() + 1 : undefined,
-          }
-        : {
-            year: specificDate!.getFullYear(),
-            month:
-              type === "monthly" ? specificDate!.getMonth() + 1 : undefined,
-          }),
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+    setIsSaving(true);
 
-    // TODO: 실제 저장 로직 구현
-    console.log("예산 저장", budget);
-    router.push("/book/budget");
+    try {
+      // 날짜 계산
+      let start: Date;
+      let end: Date;
+
+      if (isRecurring) {
+        // 반복 예산: 시작일부터 미래까지 (2099-12-31)
+        start = new Date(startDate!);
+        start.setHours(0, 0, 0, 0);
+        if (type === "monthly") {
+          // 월의 첫 날로 설정
+          start.setDate(1);
+        } else {
+          // 연도의 첫 날로 설정
+          start.setMonth(0, 1);
+        }
+        end = new Date("2099-12-31T23:59:59.999Z");
+      } else {
+        // 비반복 예산: 특정 기간
+        if (type === "monthly") {
+          start = new Date(specificDate!);
+          start.setDate(1);
+          start.setHours(0, 0, 0, 0);
+          end = new Date(specificDate!);
+          end.setMonth(end.getMonth() + 1);
+          end.setDate(0); // 해당 월의 마지막 날
+          end.setHours(23, 59, 59, 999);
+        } else {
+          start = new Date(specificDate!);
+          start.setMonth(0, 1);
+          start.setHours(0, 0, 0, 0);
+          end = new Date(specificDate!);
+          end.setMonth(11, 31);
+          end.setHours(23, 59, 59, 999);
+        }
+      }
+
+      const response = await fetch(`/api/book/${bookId}/budget`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          categoryId,
+          period: type,
+          amount: Number(amount),
+          startDate: start.toISOString(),
+          endDate: end.toISOString(),
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "예산 추가에 실패했습니다.");
+      }
+
+      toast.success("예산이 추가되었습니다.");
+      router.push("/book/budget");
+    } catch (error) {
+      console.error("예산 추가 오류:", error);
+      toast.error(
+        error instanceof Error ? error.message : "예산 추가에 실패했습니다."
+      );
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleBack = () => {
@@ -183,8 +285,17 @@ export default function AddBudgetPage() {
         </Button>
       }
       rightAction={
-        <Button variant="ghost" size="icon" onClick={handleSave}>
-          <Check className="size-4" />
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleSave}
+          disabled={isSaving || isLoading}
+        >
+          {isSaving ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Check className="size-4" />
+          )}
           <span className="sr-only">저장</span>
         </Button>
       }
@@ -205,15 +316,32 @@ export default function AddBudgetPage() {
           <CategoryDrawer
             selectedCategoryId={categoryId}
             onSelectCategory={setCategoryId}
+            categories={categories}
           >
             <Button
               variant="outline"
               className="w-full justify-start text-left font-normal"
+              disabled={isLoading}
             >
               {selectedCategory ? (
                 <>
-                  <selectedCategory.icon className="mr-2 h-4 w-4" />
-                  {selectedCategory.name}
+                  {selectedCategory.icon &&
+                  (LucideIcons[selectedCategory.icon as keyof typeof LucideIcons] as LucideIcon) ? (
+                    <>
+                      {(() => {
+                        const IconComponent = LucideIcons[
+                          selectedCategory.icon as keyof typeof LucideIcons
+                        ] as LucideIcon;
+                        return <IconComponent className="mr-2 h-4 w-4" />;
+                      })()}
+                      {selectedCategory.name}
+                    </>
+                  ) : (
+                    <>
+                      <span className="mr-2">{selectedCategory.icon || "📦"}</span>
+                      {selectedCategory.name}
+                    </>
+                  )}
                 </>
               ) : (
                 "카테고리 선택"

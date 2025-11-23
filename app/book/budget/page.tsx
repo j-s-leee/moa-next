@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AppLayout } from "@/components/app-layout";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -17,39 +17,56 @@ import {
   Trash2,
   Plus,
   ChevronDown,
+  Loader2,
+  AlertTriangle,
   type LucideIcon,
 } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, TooltipProps } from "recharts";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
-import { UtensilsCrossed, ShoppingCart, Coffee, Home, Car } from "lucide-react";
-
-// 카테고리 데이터 (실제로는 카테고리 관리에서 가져와야 함)
-const expenseCategories: { id: string; name: string; icon: LucideIcon }[] = [
-  { id: "1", name: "식비", icon: UtensilsCrossed },
-  { id: "2", name: "쇼핑", icon: ShoppingCart },
-  { id: "3", name: "카페", icon: Coffee },
-  { id: "4", name: "주거", icon: Home },
-  { id: "5", name: "교통", icon: Car },
-];
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { toast } from "sonner";
+import * as LucideIcons from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 interface Budget {
   id: string;
+  bookId: string;
   categoryId: string;
-  type: "monthly" | "yearly";
+  category: {
+    id: string;
+    name: string;
+    icon: string | null;
+    type: "expense" | "income";
+    expenseType?: "fixed" | "variable" | "annual" | "one-time" | null;
+  };
+  period: "monthly" | "yearly";
   amount: number;
-  isRecurring: boolean;
-  year?: number;
-  month?: number;
-  startYear?: number;
-  startMonth?: number;
-  createdAt: Date;
-  updatedAt: Date;
+  startDate: string; // ISO string
+  endDate: string; // ISO string
+  previousBudgetId: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
-// 예산 사용량 계산용 (실제로는 지출 내역에서 계산해야 함)
+interface ExpenseItem {
+  id: string;
+  categoryId: string;
+  amount: number;
+  date: string; // ISO string
+}
+
 interface BudgetUsage {
-  budgetId: string;
   spent: number;
   percentage: number;
   remaining: number;
@@ -57,84 +74,35 @@ interface BudgetUsage {
 
 interface BudgetWithUsage extends Budget {
   categoryName: string;
-  categoryIcon: LucideIcon;
+  categoryIcon: LucideIcon | null;
   spent: number;
   percentage: number;
   remaining: number;
 }
 
-// 초기 예산 데이터 (실제로는 DB에서 가져와야 함)
-const initialBudgets: Budget[] = [
-  {
-    id: "1",
-    categoryId: "1",
-    type: "monthly",
-    amount: 500000,
-    isRecurring: true,
-    startYear: 2024,
-    startMonth: 1,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-  {
-    id: "2",
-    categoryId: "5",
-    type: "monthly",
-    amount: 200000,
-    isRecurring: true,
-    startYear: 2024,
-    startMonth: 1,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-  {
-    id: "3",
-    categoryId: "2",
-    type: "yearly",
-    amount: 3600000,
-    isRecurring: true,
-    startYear: 2024,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-];
-
-// 가짜 지출 데이터 (실제로는 지출 내역에서 가져와야 함)
-const mockExpenses: { categoryId: string; amount: number; date: Date }[] = [
-  { categoryId: "1", amount: 320000, date: new Date(2024, 0, 15) },
-  { categoryId: "5", amount: 150000, date: new Date(2024, 0, 20) },
-  { categoryId: "2", amount: 450000, date: new Date(2024, 0, 10) },
-];
-
 // 현재 월/년도에 적용되는 예산 찾기
 function getActiveBudgets(
   budgets: Budget[],
-  type: "monthly" | "yearly",
+  period: "monthly" | "yearly",
   targetYear: number,
   targetMonth?: number
 ): Budget[] {
   return budgets.filter((budget) => {
-    if (budget.type !== type) return false;
+    if (budget.period !== period) return false;
 
-    if (budget.isRecurring) {
-      // 반복 예산: 시작일 이후면 모두 적용
-      if (budget.type === "monthly") {
-        if (!budget.startYear || !budget.startMonth) return false;
-        const startDate = new Date(budget.startYear, budget.startMonth - 1);
-        const targetDate = new Date(targetYear, (targetMonth || 1) - 1);
-        return targetDate >= startDate;
-      } else {
-        // 연간 반복
-        if (!budget.startYear) return false;
-        return targetYear >= budget.startYear;
-      }
+    const startDate = new Date(budget.startDate);
+    const endDate = new Date(budget.endDate);
+
+    if (period === "monthly" && targetMonth) {
+      // 월간: 해당 월의 1일 ~ 마지막일
+      const monthStart = new Date(targetYear, targetMonth - 1, 1);
+      const monthEnd = new Date(targetYear, targetMonth, 0, 23, 59, 59, 999);
+      return startDate <= monthEnd && endDate >= monthStart;
     } else {
-      // 비반복 예산: 정확히 일치하는 경우만
-      if (budget.type === "monthly") {
-        return budget.year === targetYear && budget.month === targetMonth;
-      } else {
-        return budget.year === targetYear;
-      }
+      // 연간: 해당 년의 1월 1일 ~ 12월 31일
+      const yearStart = new Date(targetYear, 0, 1);
+      const yearEnd = new Date(targetYear, 11, 31, 23, 59, 59, 999);
+      return startDate <= yearEnd && endDate >= yearStart;
     }
   });
 }
@@ -142,21 +110,22 @@ function getActiveBudgets(
 // 월간 예산 사용량 계산
 function calculateMonthlyBudgetUsage(
   budget: Budget,
-  expenses: { categoryId: string; amount: number; date: Date }[],
+  expenses: ExpenseItem[],
   year: number,
   month: number
 ): BudgetUsage {
-  const budgetExpenses = expenses.filter(
-    (expense) =>
-      expense.categoryId === budget.categoryId &&
-      expense.date.getFullYear() === year &&
-      expense.date.getMonth() + 1 === month
-  );
+  const budgetExpenses = expenses.filter((expense) => {
+    if (expense.categoryId !== budget.categoryId) return false;
+    const expenseDate = new Date(expense.date);
+    return (
+      expenseDate.getFullYear() === year &&
+      expenseDate.getMonth() + 1 === month
+    );
+  });
 
   const spent = budgetExpenses.reduce((sum, e) => sum + e.amount, 0);
 
   return {
-    budgetId: budget.id,
     spent,
     percentage: Math.round((spent / budget.amount) * 100),
     remaining: budget.amount - spent,
@@ -166,19 +135,18 @@ function calculateMonthlyBudgetUsage(
 // 연간 예산 사용량 계산
 function calculateYearlyBudgetUsage(
   budget: Budget,
-  expenses: { categoryId: string; amount: number; date: Date }[],
+  expenses: ExpenseItem[],
   year: number
 ): BudgetUsage {
-  const budgetExpenses = expenses.filter(
-    (expense) =>
-      expense.categoryId === budget.categoryId &&
-      expense.date.getFullYear() === year
-  );
+  const budgetExpenses = expenses.filter((expense) => {
+    if (expense.categoryId !== budget.categoryId) return false;
+    const expenseDate = new Date(expense.date);
+    return expenseDate.getFullYear() === year;
+  });
 
   const spent = budgetExpenses.reduce((sum, e) => sum + e.amount, 0);
 
   return {
-    budgetId: budget.id,
     spent,
     percentage: Math.round((spent / budget.amount) * 100),
     remaining: budget.amount - spent,
@@ -218,14 +186,55 @@ function BudgetItem({
   budget,
   onEdit,
   onDelete,
+  isDeleting,
 }: {
   budget: BudgetWithUsage;
   onEdit: (budget: BudgetWithUsage) => void;
   onDelete: (id: string) => void;
+  isDeleting: boolean;
 }) {
   const percentage = Math.min(budget.percentage, 100);
-  const isOverBudget = budget.spent > budget.amount;
+  const isFixedExpense = budget.category.expenseType === "fixed";
+  // 고정지출인 경우: 정확히 100% 사용하는 것이 정상이므로 초과로 간주하지 않음
+  // 변동지출인 경우: 100% 초과 시에만 초과로 간주
+  const isOverBudget = !isFixedExpense && budget.spent > budget.amount;
+  // 고정지출인 경우 경고 표시하지 않음
+  const isWarning = !isFixedExpense && percentage >= 80 && percentage < 100;
+  const isCritical = !isFixedExpense && percentage >= 100;
   const Icon = budget.categoryIcon;
+
+  // 경고 레벨에 따른 색상 결정
+  // 고정지출인 경우 경고 색상 표시하지 않음
+  const getWarningColor = () => {
+    if (isFixedExpense) return "";
+    if (isCritical) return "text-red-600 dark:text-red-400";
+    if (isWarning) return "text-orange-600 dark:text-orange-400";
+    return "";
+  };
+
+  const getWarningBadge = () => {
+    // 고정지출인 경우 경고 표시하지 않음
+    if (isFixedExpense) {
+      return null;
+    }
+    if (isCritical) {
+      return (
+        <Badge variant="destructive" className="text-xs">
+          <AlertTriangle className="h-3 w-3 mr-1" />
+          초과
+        </Badge>
+      );
+    }
+    if (isWarning) {
+      return (
+        <Badge variant="outline" className="text-xs border-orange-500 text-orange-600 dark:text-orange-400">
+          <AlertTriangle className="h-3 w-3 mr-1" />
+          경고
+        </Badge>
+      );
+    }
+    return null;
+  };
 
   return (
     <div className="flex items-center gap-4 p-4 rounded-lg bg-card hover:bg-accent/50 transition-colors">
@@ -233,9 +242,7 @@ function BudgetItem({
         <DonutChart percentage={percentage} />
         <div className="absolute inset-0 flex items-center justify-center">
           <span
-            className={`text-xs font-semibold ${
-              isOverBudget ? "text-red-600 dark:text-red-400" : ""
-            }`}
+            className={`text-xs font-semibold ${getWarningColor()}`}
           >
             {percentage}%
           </span>
@@ -243,11 +250,24 @@ function BudgetItem({
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <Icon className="h-4 w-4 text-muted-foreground" />
+          {Icon ? (
+            <Icon className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <span className="text-sm">{budget.category.icon || "📦"}</span>
+          )}
           <div className="font-medium">{budget.categoryName}</div>
+          {isFixedExpense && (
+            <Badge variant="outline" className="text-xs">
+              고정지출
+            </Badge>
+          )}
+          {getWarningBadge()}
         </div>
         <div className="text-sm text-muted-foreground">
-          {budget.amount.toLocaleString()}원
+          예산: {budget.amount.toLocaleString()}원
+        </div>
+        <div className="text-xs text-muted-foreground mt-1">
+          사용: {budget.spent.toLocaleString()}원 / 남은: {budget.remaining.toLocaleString()}원
         </div>
       </div>
       <div className="flex items-center gap-2">
@@ -255,10 +275,32 @@ function BudgetItem({
           <Edit2 className="h-4 w-4" />
           <span className="sr-only">수정</span>
         </Button>
-        <Button variant="ghost" size="icon" onClick={() => onDelete(budget.id)}>
-          <Trash2 className="h-4 w-4" />
-          <span className="sr-only">삭제</span>
-        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="ghost" size="icon" disabled={isDeleting}>
+              {isDeleting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+              <span className="sr-only">삭제</span>
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>예산 삭제</AlertDialogTitle>
+              <AlertDialogDescription>
+                정말 이 예산을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>취소</AlertDialogCancel>
+              <AlertDialogAction onClick={() => onDelete(budget.id)}>
+                삭제
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </div>
   );
@@ -441,19 +483,131 @@ function YearSelector({
 
 export default function BudgetPage() {
   const router = useRouter();
+  const [bookId, setBookId] = useState<string | null>(null);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"monthly" | "yearly">("monthly");
-  const [budgets, setBudgets] = useState<Budget[]>(initialBudgets);
   const [selectedMonth, setSelectedMonth] = useState(new Date());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // 가계부 ID 및 예산 데이터 로드
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        // 개인 가계부 목록 조회
+        const booksResponse = await fetch("/api/book");
+        if (!booksResponse.ok) {
+          throw new Error("가계부 목록 조회에 실패했습니다.");
+        }
+        const booksData = await booksResponse.json();
+        const personalBook = booksData.books?.[0];
+
+        if (!personalBook) {
+          toast.error("가계부를 찾을 수 없습니다.");
+          router.push("/book");
+          return;
+        }
+
+        setBookId(personalBook.id);
+        await loadBudgetsAndExpenses(personalBook.id);
+      } catch (error) {
+        console.error("데이터 로드 오류:", error);
+        toast.error(
+          error instanceof Error ? error.message : "데이터 로드에 실패했습니다."
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadData();
+  }, [router]);
+
+  // 예산 및 지출 데이터 로드
+  const loadBudgetsAndExpenses = async (bookId: string) => {
+    try {
+      const year = activeTab === "monthly" ? selectedMonth.getFullYear() : selectedYear;
+      const month = activeTab === "monthly" ? selectedMonth.getMonth() + 1 : undefined;
+
+      // 예산 목록 조회
+      const budgetParams = new URLSearchParams({
+        period: activeTab,
+        year: year.toString(),
+      });
+      if (month) {
+        budgetParams.append("month", month.toString());
+      }
+
+      const budgetsResponse = await fetch(
+        `/api/book/${bookId}/budget?${budgetParams.toString()}`
+      );
+      if (!budgetsResponse.ok) {
+        throw new Error("예산 목록 조회에 실패했습니다.");
+      }
+      const budgetsData = await budgetsResponse.json();
+      setBudgets(budgetsData.budgets || []);
+
+      // 지출 내역 조회 (사용량 계산용)
+      const startDate = activeTab === "monthly"
+        ? new Date(year, month! - 1, 1)
+        : new Date(year, 0, 1);
+      const endDate = activeTab === "monthly"
+        ? new Date(year, month!, 0, 23, 59, 59, 999)
+        : new Date(year, 11, 31, 23, 59, 59, 999);
+
+      const expensesResponse = await fetch(
+        `/api/book/${bookId}/expense?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
+      );
+      if (!expensesResponse.ok) {
+        throw new Error("지출 내역 조회에 실패했습니다.");
+      }
+      const expensesData = await expensesResponse.json();
+      setExpenses(expensesData.expenses || []);
+    } catch (error) {
+      console.error("데이터 로드 오류:", error);
+      toast.error(
+        error instanceof Error ? error.message : "데이터 로드에 실패했습니다."
+      );
+    }
+  };
+
+  // 탭 또는 날짜 변경 시 데이터 다시 로드
+  useEffect(() => {
+    if (bookId) {
+      loadBudgetsAndExpenses(bookId);
+    }
+  }, [bookId, activeTab, selectedMonth, selectedYear]);
 
   const handleEdit = (budget: BudgetWithUsage) => {
     // TODO: 예산 수정 모달/다이얼로그 구현
-    console.log("수정", budget);
+    toast.info("예산 수정 기능은 곧 추가될 예정입니다.");
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm("정말 삭제하시겠습니까?")) {
-      setBudgets((prev) => prev.filter((b) => b.id !== id));
+  const handleDelete = async (id: string) => {
+    if (!bookId) return;
+
+    setDeletingId(id);
+    try {
+      const response = await fetch(`/api/book/${bookId}/budget/${id}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "예산 삭제에 실패했습니다.");
+      }
+
+      toast.success("예산이 삭제되었습니다.");
+      await loadBudgetsAndExpenses(bookId);
+    } catch (error) {
+      console.error("예산 삭제 오류:", error);
+      toast.error(
+        error instanceof Error ? error.message : "예산 삭제에 실패했습니다."
+      );
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -471,24 +625,67 @@ export default function BudgetPage() {
 
   // 예산에 카테고리 정보와 사용량 추가
   const budgetsWithUsage: BudgetWithUsage[] = activeBudgets.map((budget) => {
-    const category = expenseCategories.find((c) => c.id === budget.categoryId);
+    const IconComponent = budget.category.icon
+      ? (LucideIcons[budget.category.icon as keyof typeof LucideIcons] as LucideIcon)
+      : null;
+
     const usage =
       activeTab === "monthly"
         ? calculateMonthlyBudgetUsage(
             budget,
-            mockExpenses,
+            expenses,
             selectedMonth.getFullYear(),
             selectedMonth.getMonth() + 1
           )
-        : calculateYearlyBudgetUsage(budget, mockExpenses, selectedYear);
+        : calculateYearlyBudgetUsage(budget, expenses, selectedYear);
 
     return {
       ...budget,
-      categoryName: category?.name || "알 수 없음",
-      categoryIcon: category?.icon || Home,
+      categoryName: budget.category.name,
+      categoryIcon: IconComponent,
       ...usage,
     };
   });
+
+  // 예산 대비 지출 차트 데이터 준비
+  const chartData = budgetsWithUsage.map((budget) => ({
+    name: budget.categoryName,
+    예산: budget.amount,
+    지출: budget.spent,
+    남은: Math.max(0, budget.remaining),
+  }));
+
+  // 예산 초과 알림 (페이지 로드 시 한 번만)
+  // 고정지출은 제외
+  useEffect(() => {
+    if (!isLoading && budgetsWithUsage.length > 0) {
+      const overBudgets = budgetsWithUsage.filter(
+        (b) => b.spent > b.amount && b.category.expenseType !== "fixed"
+      );
+      const warningBudgets = budgetsWithUsage.filter(
+        (b) =>
+          b.percentage >= 80 &&
+          b.percentage < 100 &&
+          b.category.expenseType !== "fixed"
+      );
+
+      if (overBudgets.length > 0) {
+        toast.warning(
+          `${overBudgets.length}개의 예산이 초과되었습니다.`,
+          {
+            description: overBudgets.map((b) => b.categoryName).join(", "),
+          }
+        );
+      } else if (warningBudgets.length > 0) {
+        toast.info(
+          `${warningBudgets.length}개의 예산이 80% 이상 사용되었습니다.`,
+          {
+            description: warningBudgets.map((b) => b.categoryName).join(", "),
+          }
+        );
+      }
+    }
+  }, [budgetsWithUsage, isLoading]);
 
   const handleBack = () => {
     // 컨텍스트 메뉴를 통해 직접 접근한 경우를 대비해 부모 라우트로 이동
@@ -509,10 +706,31 @@ export default function BudgetPage() {
         </Button>
       }
       rightAction={
-        <Button variant="ghost" size="icon" onClick={handleAdd}>
-          <Plus className="size-4" />
-          <span className="sr-only">추가</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              if (!bookId) return;
+              try {
+                const response = await fetch(
+                  `/api/book/${bookId}/budget/suggest?period=${activeTab}`
+                );
+                if (!response.ok) throw new Error("예산 제안 조회 실패");
+                const data = await response.json();
+                router.push(`/book/budget/suggest?period=${activeTab}`);
+              } catch (error) {
+                toast.error("예산 제안을 불러오는데 실패했습니다.");
+              }
+            }}
+          >
+            예산 제안
+          </Button>
+          <Button variant="ghost" size="icon" onClick={handleAdd}>
+            <Plus className="size-4" />
+            <span className="sr-only">추가</span>
+          </Button>
+        </div>
       }
     >
       <Tabs
@@ -538,41 +756,131 @@ export default function BudgetPage() {
         </div>
 
         <TabsContent value="monthly">
-          <div className="space-y-2">
-            {budgetsWithUsage.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                예산이 없습니다.
-              </div>
-            ) : (
-              budgetsWithUsage.map((budget) => (
-                <BudgetItem
-                  key={budget.id}
-                  budget={budget}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                />
-              ))
-            )}
-          </div>
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {budgetsWithUsage.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  예산이 없습니다.
+                </div>
+              ) : (
+                <>
+                  {/* 예산 대비 지출 차트 */}
+                  {budgetsWithUsage.length > 0 && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>예산 대비 지출 현황</CardTitle>
+                        <CardDescription>
+                          {selectedMonth.getFullYear()}년 {selectedMonth.getMonth() + 1}월 예산 대비 지출
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <ResponsiveContainer width="100%" height={300}>
+                          <BarChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis
+                              dataKey="name"
+                              angle={-45}
+                              textAnchor="end"
+                              height={100}
+                              interval={0}
+                            />
+                            <YAxis />
+                            <Tooltip
+                              formatter={(value: number) => `${value.toLocaleString()}원`}
+                            />
+                            <Legend />
+                            <Bar dataKey="예산" fill="#8884d8" />
+                            <Bar dataKey="지출" fill="#82ca9d" />
+                            <Bar dataKey="남은" fill="#ffc658" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </CardContent>
+                    </Card>
+                  )}
+                  {/* 예산 목록 */}
+                  <div className="space-y-2">
+                    {budgetsWithUsage.map((budget) => (
+                      <BudgetItem
+                        key={budget.id}
+                        budget={budget}
+                        onEdit={handleEdit}
+                        onDelete={handleDelete}
+                        isDeleting={deletingId === budget.id}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="yearly">
-          <div className="space-y-2">
-            {budgetsWithUsage.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                예산이 없습니다.
-              </div>
-            ) : (
-              budgetsWithUsage.map((budget) => (
-                <BudgetItem
-                  key={budget.id}
-                  budget={budget}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                />
-              ))
-            )}
-          </div>
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {budgetsWithUsage.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  예산이 없습니다.
+                </div>
+              ) : (
+                <>
+                  {/* 예산 대비 지출 차트 */}
+                  {budgetsWithUsage.length > 0 && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>예산 대비 지출 현황</CardTitle>
+                        <CardDescription>
+                          {selectedYear}년 예산 대비 지출
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <ResponsiveContainer width="100%" height={300}>
+                          <BarChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis
+                              dataKey="name"
+                              angle={-45}
+                              textAnchor="end"
+                              height={100}
+                              interval={0}
+                            />
+                            <YAxis />
+                            <Tooltip
+                              formatter={(value: number) => `${value.toLocaleString()}원`}
+                            />
+                            <Legend />
+                            <Bar dataKey="예산" fill="#8884d8" />
+                            <Bar dataKey="지출" fill="#82ca9d" />
+                            <Bar dataKey="남은" fill="#ffc658" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </CardContent>
+                    </Card>
+                  )}
+                  {/* 예산 목록 */}
+                  <div className="space-y-2">
+                    {budgetsWithUsage.map((budget) => (
+                      <BudgetItem
+                        key={budget.id}
+                        budget={budget}
+                        onEdit={handleEdit}
+                        onDelete={handleDelete}
+                        isDeleting={deletingId === budget.id}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </TabsContent>
       </Tabs>
     </AppLayout>
