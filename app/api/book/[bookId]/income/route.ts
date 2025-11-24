@@ -1,13 +1,25 @@
-import { createServerSupabaseClient } from '@/lib/supabase/server'
-import { db } from '@/lib/db'
-import { incomes, books, categories } from '@/lib/db/schema'
-import { eq, and, gte, lte, desc, or, isNull, isNotNull } from 'drizzle-orm'
-import { NextResponse } from 'next/server'
+import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { incomes, books, categories } from "@/lib/db/schema";
+import {
+  eq,
+  and,
+  gte,
+  lte,
+  lt,
+  desc,
+  or,
+  isNull,
+  isNotNull,
+} from "drizzle-orm";
+import { NextResponse } from "next/server";
+import { isValidDateString } from "@/lib/utils/date";
+import { DateTime } from "luxon";
 
 /**
  * 수입 목록 조회 API
  * GET /api/book/[bookId]/income?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&incomeType=actual|transfer
- * 
+ *
  * 특정 가계부의 수입 목록을 조회합니다.
  * 쿼리 파라미터로 기간 및 수입 타입 필터링 가능합니다.
  */
@@ -16,84 +28,105 @@ export async function GET(
   { params }: { params: Promise<{ bookId: string }> }
 ) {
   try {
-    const supabase = await createServerSupabaseClient()
-    
+    const supabase = await createServerSupabaseClient();
+
     // 현재 사용자 세션 확인
     const {
       data: { user: authUser },
       error: authError,
-    } = await supabase.auth.getUser()
+    } = await supabase.auth.getUser();
 
     if (authError || !authUser) {
       return NextResponse.json(
-        { error: '인증되지 않은 사용자입니다.' },
+        { error: "인증되지 않은 사용자입니다." },
         { status: 401 }
-      )
+      );
     }
 
-    const { bookId } = await params
+    const { bookId } = await params;
 
     // 가계부 소유권 확인
     const [book] = await db
       .select()
       .from(books)
-      .where(
-        and(
-          eq(books.id, bookId),
-          eq(books.ownerId, authUser.id)
-        )
-      )
-      .limit(1)
+      .where(and(eq(books.id, bookId), eq(books.ownerId, authUser.id)))
+      .limit(1);
 
     if (!book) {
       return NextResponse.json(
-        { error: '가계부를 찾을 수 없거나 접근 권한이 없습니다.' },
+        { error: "가계부를 찾을 수 없거나 접근 권한이 없습니다." },
         { status: 404 }
-      )
+      );
     }
 
     // 쿼리 파라미터 추출
-    const { searchParams } = new URL(request.url)
-    const startDateParam = searchParams.get('startDate')
-    const endDateParam = searchParams.get('endDate')
-    const incomeTypeParam = searchParams.get('incomeType')
+    const { searchParams } = new URL(request.url);
+    const startDateParam = searchParams.get("startDate");
+    const endDateParam = searchParams.get("endDate");
+    const incomeTypeParam = searchParams.get("incomeType");
 
-    // 날짜 파싱 및 검증
-    let startDate: Date | null = null
-    let endDate: Date | null = null
+    // 날짜 파싱 및 검증 (YYYY-MM-DD 형식)
+    let startDate: DateTime | null = null;
+    let endDate: DateTime | null = null;
 
     if (startDateParam) {
-      startDate = new Date(startDateParam)
-      if (isNaN(startDate.getTime())) {
+      try {
+        if (!isValidDateString(startDateParam)) {
+          return NextResponse.json(
+            { error: "시작 날짜는 YYYY-MM-DD 형식이어야 합니다." },
+            { status: 400 }
+          );
+        }
+        startDate = DateTime.fromISO(startDateParam);
+      } catch (error) {
         return NextResponse.json(
-          { error: '잘못된 시작 날짜 형식입니다.' },
+          {
+            error:
+              error instanceof Error
+                ? error.message
+                : "잘못된 시작 날짜 형식입니다.",
+          },
           { status: 400 }
-        )
+        );
       }
     }
 
     if (endDateParam) {
-      endDate = new Date(endDateParam)
-      if (isNaN(endDate.getTime())) {
+      try {
+        if (!isValidDateString(endDateParam)) {
+          return NextResponse.json(
+            { error: "종료 날짜는 YYYY-MM-DD 형식이어야 합니다." },
+            { status: 400 }
+          );
+        }
+        endDate = DateTime.fromISO(endDateParam);
+      } catch (error) {
         return NextResponse.json(
-          { error: '잘못된 종료 날짜 형식입니다.' },
+          {
+            error:
+              error instanceof Error
+                ? error.message
+                : "잘못된 종료 날짜 형식입니다.",
+          },
           { status: 400 }
-        )
+        );
       }
-      // endDate는 해당 날짜의 23:59:59까지 포함하도록 설정
-      endDate.setHours(23, 59, 59, 999)
     }
 
     // 수입 타입 검증
-    if (incomeTypeParam && incomeTypeParam !== 'actual' && incomeTypeParam !== 'transfer') {
+    if (
+      incomeTypeParam &&
+      incomeTypeParam !== "actual" &&
+      incomeTypeParam !== "transfer"
+    ) {
       return NextResponse.json(
-        { error: '수입 타입은 actual 또는 transfer여야 합니다.' },
+        { error: "수입 타입은 actual 또는 transfer여야 합니다." },
         { status: 400 }
-      )
+      );
     }
 
     // 수입 조회 조건 구성
-    const whereConditions = [eq(incomes.bookId, bookId)]
+    const whereConditions = [eq(incomes.bookId, bookId)];
 
     // 기간 필터링: 단일 거래(date)와 반복 수입(startDate/endDate) 모두 고려
     if (startDate || endDate) {
@@ -101,65 +134,60 @@ export async function GET(
         // 두 날짜 모두 있는 경우:
         // 1. 단일 거래: date가 기간 내에 있는 경우
         // 2. 반복 수입: 기간이 겹치는 경우
+        const endDateCheck = or(
+          gte(incomes.endDate, startDate.toFormat("yyyy-MM-dd")),
+          isNull(incomes.endDate)
+        )!;
+        const singleTransactionCondition = and(
+          isNull(incomes.period), // period가 null이면 단일 거래
+          gte(incomes.date, startDate.toFormat("yyyy-MM-dd")),
+          lt(incomes.date, endDate.toFormat("yyyy-MM-dd"))
+        )!;
+        const recurringIncomeCondition = and(
+          isNotNull(incomes.period), // period가 있으면 반복 수입
+          lt(incomes.startDate, endDate.toFormat("yyyy-MM-dd")),
+          endDateCheck
+        )!;
         whereConditions.push(
-          or(
-            // 단일 거래 (date가 기간 내)
-            and(
-              isNull(incomes.period), // period가 null이면 단일 거래
-              gte(incomes.date, startDate),
-              lte(incomes.date, endDate)
-            ),
-            // 반복 수입 (기간이 겹침)
-            and(
-              isNotNull(incomes.period), // period가 있으면 반복 수입
-              lte(incomes.startDate, endDate),
-              or(
-                gte(incomes.endDate, startDate),
-                isNull(incomes.endDate)
-              )
-            )
-          )
-        )
+          or(singleTransactionCondition, recurringIncomeCondition)!
+        );
       } else if (startDate) {
         // startDate만 있는 경우
+        const endDateCheck = or(
+          gte(incomes.startDate, startDate.toFormat("yyyy-MM-dd")),
+          isNull(incomes.endDate)
+        )!;
+        const singleTransactionCondition = and(
+          isNull(incomes.period),
+          gte(incomes.date, startDate.toFormat("yyyy-MM-dd"))
+        )!;
+        const recurringIncomeCondition = and(
+          isNotNull(incomes.period),
+          endDateCheck
+        )!;
         whereConditions.push(
-          or(
-            // 단일 거래: startDate 이후
-            and(
-              isNull(incomes.period),
-              gte(incomes.date, startDate)
-            ),
-            // 반복 수입: startDate 이후에 시작하거나 아직 종료되지 않음
-            and(
-              isNotNull(incomes.period),
-              or(
-                gte(incomes.startDate, startDate),
-                isNull(incomes.endDate)
-              )
-            )
-          )
-        )
+          or(singleTransactionCondition, recurringIncomeCondition)!
+        );
       } else if (endDate) {
         // endDate만 있는 경우
+        const singleTransactionCondition = and(
+          isNull(incomes.period),
+          lt(incomes.date, endDate.toFormat("yyyy-MM-dd"))
+        )!;
+        const recurringIncomeCondition = and(
+          isNotNull(incomes.period),
+          lt(incomes.startDate, endDate.toFormat("yyyy-MM-dd"))
+        )!;
         whereConditions.push(
-          or(
-            // 단일 거래: endDate 이전
-            and(
-              isNull(incomes.period),
-              lte(incomes.date, endDate)
-            ),
-            // 반복 수입: endDate 이전에 시작
-            and(
-              isNotNull(incomes.period),
-              lte(incomes.startDate, endDate)
-            )
-          )
-        )
+          or(singleTransactionCondition, recurringIncomeCondition)!
+        );
       }
     }
 
     if (incomeTypeParam) {
-      whereConditions.push(eq(incomes.incomeType, incomeTypeParam))
+      whereConditions.push(
+        eq(incomes.incomeType, incomeTypeParam as "actual" | "transfer")
+      );
     }
 
     // 수입 목록 조회 (카테고리 정보 포함)
@@ -176,6 +204,7 @@ export async function GET(
           type: categories.type,
         },
         amount: incomes.amount,
+        date: incomes.date, // 단일 거래 날짜 추가
         period: incomes.period,
         source: incomes.source,
         incomeType: incomes.incomeType,
@@ -188,24 +217,24 @@ export async function GET(
       .from(incomes)
       .leftJoin(categories, eq(incomes.categoryId, categories.id))
       .where(and(...whereConditions))
-      .orderBy(desc(incomes.startDate), desc(incomes.createdAt))
+      .orderBy(desc(incomes.startDate), desc(incomes.createdAt));
 
     return NextResponse.json({
       incomes: incomeList,
-    })
+    });
   } catch (error) {
-    console.error('수입 목록 조회 오류:', error)
+    console.error("수입 목록 조회 오류:", error);
     return NextResponse.json(
-      { error: '수입 목록 조회 중 오류가 발생했습니다.' },
+      { error: "수입 목록 조회 중 오류가 발생했습니다." },
       { status: 500 }
-    )
+    );
   }
 }
 
 /**
  * 수입 추가 API
  * POST /api/book/[bookId]/income
- * 
+ *
  * 새로운 수입을 추가합니다.
  */
 export async function POST(
@@ -213,70 +242,78 @@ export async function POST(
   { params }: { params: Promise<{ bookId: string }> }
 ) {
   try {
-    const supabase = await createServerSupabaseClient()
-    
+    const supabase = await createServerSupabaseClient();
+
     // 현재 사용자 세션 확인
     const {
       data: { user: authUser },
       error: authError,
-    } = await supabase.auth.getUser()
+    } = await supabase.auth.getUser();
 
     if (authError || !authUser) {
       return NextResponse.json(
-        { error: '인증되지 않은 사용자입니다.' },
+        { error: "인증되지 않은 사용자입니다." },
         { status: 401 }
-      )
+      );
     }
 
-    const { bookId } = await params
+    const { bookId } = await params;
 
     // 가계부 소유권 확인
     const [book] = await db
       .select()
       .from(books)
-      .where(
-        and(
-          eq(books.id, bookId),
-          eq(books.ownerId, authUser.id)
-        )
-      )
-      .limit(1)
+      .where(and(eq(books.id, bookId), eq(books.ownerId, authUser.id)))
+      .limit(1);
 
     if (!book) {
       return NextResponse.json(
-        { error: '가계부를 찾을 수 없거나 접근 권한이 없습니다.' },
+        { error: "가계부를 찾을 수 없거나 접근 권한이 없습니다." },
         { status: 404 }
-      )
+      );
     }
 
     // 요청 본문 파싱
-    const body = await request.json()
-    const { categoryId, amount, date, period, source, incomeType, startDate, endDate, transferredFromBookId } = body
+    const body = await request.json();
+    const {
+      categoryId,
+      amount,
+      date,
+      period,
+      source,
+      incomeType,
+      startDate,
+      endDate,
+      transferredFromBookId,
+    } = body;
 
     // 유효성 검사
-    if (!categoryId || typeof categoryId !== 'string') {
+    if (!categoryId || typeof categoryId !== "string") {
       return NextResponse.json(
-        { error: '카테고리는 필수입니다.' },
+        { error: "카테고리는 필수입니다." },
         { status: 400 }
-      )
+      );
     }
 
-    if (!amount || typeof amount !== 'number' || amount <= 0) {
+    if (!amount || typeof amount !== "number" || amount <= 0) {
       return NextResponse.json(
-        { error: '금액은 0보다 큰 숫자여야 합니다.' },
+        { error: "금액은 0보다 큰 숫자여야 합니다." },
         { status: 400 }
-      )
+      );
     }
 
     // 단일 거래 vs 반복 수입 구분
-    const isSingleTransaction = !!date && !period && !startDate
-    const isRecurringIncome = !!period && !!startDate && !date
+    const isSingleTransaction = !!date && !period && !startDate;
+    const isRecurringIncome = !!period && !!startDate && !date;
 
     if (!isSingleTransaction && !isRecurringIncome) {
       return NextResponse.json(
-        { error: '단일 거래(date) 또는 반복 수입(period, startDate) 중 하나를 선택해야 합니다.' },
+        {
+          error:
+            "단일 거래(date) 또는 반복 수입(period, startDate) 중 하나를 선택해야 합니다.",
+        },
         { status: 400 }
-      )
+      );
     }
 
     // 카테고리 확인 (해당 가계부에 속하는지)
@@ -287,83 +324,142 @@ export async function POST(
         and(
           eq(categories.id, categoryId),
           eq(categories.bookId, bookId),
-          eq(categories.type, 'income') // 수입 카테고리만 허용
+          eq(categories.type, "income") // 수입 카테고리만 허용
         )
       )
-      .limit(1)
+      .limit(1);
 
     if (!category) {
       return NextResponse.json(
-        { error: '카테고리를 찾을 수 없거나 해당 가계부에 속하지 않습니다.' },
+        { error: "카테고리를 찾을 수 없거나 해당 가계부에 속하지 않습니다." },
         { status: 404 }
-      )
+      );
     }
 
-    const finalIncomeType = incomeType || 'actual'
-    if (finalIncomeType !== 'actual' && finalIncomeType !== 'transfer') {
+    const finalIncomeType = incomeType || "actual";
+    if (finalIncomeType !== "actual" && finalIncomeType !== "transfer") {
       return NextResponse.json(
-        { error: '수입 타입은 actual 또는 transfer여야 합니다.' },
+        { error: "수입 타입은 actual 또는 transfer여야 합니다." },
         { status: 400 }
-      )
+      );
     }
 
     // 단일 거래인 경우
-    let incomeDate: Date | null = null
+    let incomeDate: string | null = null;
     if (isSingleTransaction) {
-      incomeDate = new Date(date)
-      if (isNaN(incomeDate.getTime())) {
+      try {
+        if (typeof date !== "string" || !isValidDateString(date)) {
+          return NextResponse.json(
+            { error: "날짜는 YYYY-MM-DD 형식이어야 합니다." },
+            { status: 400 }
+          );
+        }
+        const dateTime = DateTime.fromISO(date);
+        if (!dateTime.isValid) {
+          return NextResponse.json(
+            { error: "잘못된 날짜 형식입니다." },
+            { status: 400 }
+          );
+        }
+        incomeDate = dateTime.toFormat("yyyy-MM-dd");
+      } catch (error) {
         return NextResponse.json(
-          { error: '잘못된 날짜 형식입니다.' },
+          {
+            error:
+              error instanceof Error
+                ? error.message
+                : "잘못된 날짜 형식입니다.",
+          },
           { status: 400 }
-        )
+        );
       }
     }
 
     // 반복 수입인 경우
-    let incomeStartDate: Date | null = null
-    let incomeEndDate: Date | null = null
+    let incomeStartDate: string | null = null;
+    let incomeEndDate: string | null = null;
     if (isRecurringIncome) {
-      if (!period || (period !== 'monthly' && period !== 'yearly')) {
+      if (!period || (period !== "monthly" && period !== "yearly")) {
         return NextResponse.json(
-          { error: '반복 수입인 경우 기간(monthly 또는 yearly)은 필수입니다.' },
+          { error: "반복 수입인 경우 기간(monthly 또는 yearly)은 필수입니다." },
           { status: 400 }
-        )
+        );
       }
 
       if (!startDate) {
         return NextResponse.json(
-          { error: '반복 수입인 경우 시작 날짜는 필수입니다.' },
+          { error: "반복 수입인 경우 시작 날짜는 필수입니다." },
           { status: 400 }
-        )
+        );
       }
 
-      incomeStartDate = new Date(startDate)
-      if (isNaN(incomeStartDate.getTime())) {
+      try {
+        if (typeof startDate !== "string" || !isValidDateString(startDate)) {
+          return NextResponse.json(
+            { error: "시작 날짜는 YYYY-MM-DD 형식이어야 합니다." },
+            { status: 400 }
+          );
+        }
+        const startDateTime = DateTime.fromISO(startDate);
+        if (!startDateTime.isValid) {
+          return NextResponse.json(
+            { error: "잘못된 시작 날짜 형식입니다." },
+            { status: 400 }
+          );
+        }
+        incomeStartDate = startDateTime.toFormat("yyyy-MM-dd");
+      } catch (error) {
         return NextResponse.json(
-          { error: '잘못된 시작 날짜 형식입니다.' },
+          {
+            error:
+              error instanceof Error
+                ? error.message
+                : "잘못된 시작 날짜 형식입니다.",
+          },
           { status: 400 }
-        )
+        );
       }
 
       if (endDate) {
-        incomeEndDate = new Date(endDate)
-        if (isNaN(incomeEndDate.getTime())) {
+        try {
+          if (typeof endDate !== "string" || !isValidDateString(endDate)) {
+            return NextResponse.json(
+              { error: "종료 날짜는 YYYY-MM-DD 형식이어야 합니다." },
+              { status: 400 }
+            );
+          }
+          const endDateTime = DateTime.fromISO(endDate);
+          if (!endDateTime.isValid) {
+            return NextResponse.json(
+              { error: "잘못된 종료 날짜 형식입니다." },
+              { status: 400 }
+            );
+          }
+          incomeEndDate = endDateTime.toFormat("yyyy-MM-dd");
+
+          // 날짜 비교
+          if (endDateTime < DateTime.fromISO(incomeStartDate!)) {
+            return NextResponse.json(
+              { error: "종료 날짜는 시작 날짜보다 빠를 수 없습니다." },
+              { status: 400 }
+            );
+          }
+        } catch (error) {
           return NextResponse.json(
-            { error: '잘못된 종료 날짜 형식입니다.' },
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "잘못된 종료 날짜 형식입니다.",
+            },
             { status: 400 }
-          )
-        }
-        if (incomeEndDate < incomeStartDate) {
-          return NextResponse.json(
-            { error: '종료 날짜는 시작 날짜보다 빠를 수 없습니다.' },
-            { status: 400 }
-          )
+          );
         }
       }
     }
 
     // 이체인 경우 출처 가계부 확인
-    if (finalIncomeType === 'transfer' && transferredFromBookId) {
+    if (finalIncomeType === "transfer" && transferredFromBookId) {
       const [transferredFromBook] = await db
         .select()
         .from(books)
@@ -373,13 +469,13 @@ export async function POST(
             eq(books.ownerId, authUser.id)
           )
         )
-        .limit(1)
+        .limit(1);
 
       if (!transferredFromBook) {
         return NextResponse.json(
-          { error: '출처 가계부를 찾을 수 없거나 접근 권한이 없습니다.' },
+          { error: "출처 가계부를 찾을 수 없거나 접근 권한이 없습니다." },
           { status: 404 }
-        )
+        );
       }
     }
 
@@ -390,13 +486,14 @@ export async function POST(
         bookId,
         categoryId,
         amount: Math.round(amount), // 소수점 제거
-        date: incomeDate, // 단일 거래 날짜 (nullable)
+        date: incomeDate, // 단일 거래 날짜 (nullable, YYYY-MM-DD 형식)
         period: isRecurringIncome ? period : null, // 반복 주기 (nullable)
         source: source?.trim() || null, // 선택사항
         incomeType: finalIncomeType,
-        transferredFromBookId: finalIncomeType === 'transfer' ? transferredFromBookId || null : null,
-        startDate: incomeStartDate, // 반복 수입 시작일 (nullable)
-        endDate: incomeEndDate, // 반복 수입 종료일 (nullable)
+        transferredFromBookId:
+          finalIncomeType === "transfer" ? transferredFromBookId || null : null,
+        startDate: incomeStartDate, // 반복 수입 시작일 (nullable, YYYY-MM-DD 형식)
+        endDate: incomeEndDate, // 반복 수입 종료일 (nullable, YYYY-MM-DD 형식)
         updatedAt: new Date(),
       })
       .returning({
@@ -413,13 +510,13 @@ export async function POST(
         endDate: incomes.endDate,
         createdAt: incomes.createdAt,
         updatedAt: incomes.updatedAt,
-      })
+      });
 
     if (!newIncome) {
       return NextResponse.json(
-        { error: '수입 추가에 실패했습니다.' },
+        { error: "수입 추가에 실패했습니다." },
         { status: 500 }
-      )
+      );
     }
 
     // 카테고리 정보 포함하여 반환
@@ -434,22 +531,21 @@ export async function POST(
         },
       },
       { status: 201 }
-    )
+    );
   } catch (error) {
-    console.error('수입 추가 오류:', error)
-    
+    console.error("수입 추가 오류:", error);
+
     // JSON 파싱 오류 처리
     if (error instanceof SyntaxError) {
       return NextResponse.json(
-        { error: '잘못된 요청 형식입니다.' },
+        { error: "잘못된 요청 형식입니다." },
         { status: 400 }
-      )
+      );
     }
 
     return NextResponse.json(
-      { error: '수입 추가 중 오류가 발생했습니다.' },
+      { error: "수입 추가 중 오류가 발생했습니다." },
       { status: 500 }
-    )
+    );
   }
 }
-

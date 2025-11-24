@@ -87,21 +87,23 @@ function getActiveBudgets(
   targetYear: number,
   targetMonth?: number
 ): Budget[] {
+  const { DateTime } = require('luxon');
+  
   return budgets.filter((budget) => {
     if (budget.period !== period) return false;
 
-    const startDate = new Date(budget.startDate);
-    const endDate = new Date(budget.endDate);
+    const startDate = DateTime.fromISO(budget.startDate, { zone: 'utc' });
+    const endDate = DateTime.fromISO(budget.endDate, { zone: 'utc' });
 
     if (period === "monthly" && targetMonth) {
       // 월간: 해당 월의 1일 ~ 마지막일
-      const monthStart = new Date(targetYear, targetMonth - 1, 1);
-      const monthEnd = new Date(targetYear, targetMonth, 0, 23, 59, 59, 999);
+      const monthStart = DateTime.utc(targetYear, targetMonth, 1);
+      const monthEnd = monthStart.endOf('month');
       return startDate <= monthEnd && endDate >= monthStart;
     } else {
       // 연간: 해당 년의 1월 1일 ~ 12월 31일
-      const yearStart = new Date(targetYear, 0, 1);
-      const yearEnd = new Date(targetYear, 11, 31, 23, 59, 59, 999);
+      const yearStart = DateTime.utc(targetYear, 1, 1);
+      const yearEnd = DateTime.utc(targetYear, 12, 31);
       return startDate <= yearEnd && endDate >= yearStart;
     }
   });
@@ -114,12 +116,14 @@ function calculateMonthlyBudgetUsage(
   year: number,
   month: number
 ): BudgetUsage {
+  const { DateTime } = require('luxon');
+  
   const budgetExpenses = expenses.filter((expense) => {
     if (expense.categoryId !== budget.categoryId) return false;
-    const expenseDate = new Date(expense.date);
+    const expenseDate = DateTime.fromISO(expense.date, { zone: 'utc' });
     return (
-      expenseDate.getFullYear() === year &&
-      expenseDate.getMonth() + 1 === month
+      expenseDate.year === year &&
+      expenseDate.month === month
     );
   });
 
@@ -138,10 +142,12 @@ function calculateYearlyBudgetUsage(
   expenses: ExpenseItem[],
   year: number
 ): BudgetUsage {
+  const { DateTime } = require('luxon');
+  
   const budgetExpenses = expenses.filter((expense) => {
     if (expense.categoryId !== budget.categoryId) return false;
-    const expenseDate = new Date(expense.date);
-    return expenseDate.getFullYear() === year;
+    const expenseDate = DateTime.fromISO(expense.date, { zone: 'utc' });
+    return expenseDate.year === year;
   });
 
   const spent = budgetExpenses.reduce((sum, e) => sum + e.amount, 0);

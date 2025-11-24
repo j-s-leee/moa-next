@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { DateTime } from "luxon";
 import { AppLayout } from "@/components/app-layout";
 import { ExpenseCalendar } from "@/components/ui/expense-calendar";
 import {
@@ -56,17 +57,17 @@ function MonthSelector({
   selectedDate,
   onDateChange,
 }: {
-  selectedDate: Date;
-  onDateChange: (date: Date) => void;
+  selectedDate: DateTime;
+  onDateChange: (date: DateTime) => void;
 }) {
   const [open, setOpen] = useState(false);
 
-  const now = new Date();
-  const nowYear = now.getFullYear();
-  const nowMonth = now.getMonth() + 1;
+  const now = DateTime.now();
+  const nowYear = now.year;
+  const nowMonth = now.month;
 
-  const currentYear = selectedDate.getFullYear();
-  const currentMonth = selectedDate.getMonth() + 1;
+  const currentYear = selectedDate.year;
+  const currentMonth = selectedDate.month;
   const isCurrentMonth = currentYear === nowYear && currentMonth === nowMonth;
 
   // 현재 날짜 기준 전년 1월 ~ 후년 12월까지 생성
@@ -110,7 +111,7 @@ function MonthSelector({
   const monthList = generateMonthList();
 
   const handleMonthSelect = (year: number, month: number) => {
-    const newDate = new Date(year, month - 1, 1);
+    const newDate = DateTime.fromObject({ year, month, day: 1 });
     onDateChange(newDate);
     setOpen(false);
   };
@@ -215,30 +216,118 @@ function getIconComponent(iconName: string | null): LucideIcon | null {
 // 통합된 거래 아이템 타입 (지출 + 단일 거래 수입)
 type TransactionItem = ExpenseItem | (IncomeItem & { date: string });
 
-// 날짜별로 그룹화하는 함수 (지출과 단일 거래 수입 통합)
+// 반복 수입을 해당 기간의 실제 발생 날짜로 변환
+function getRecurringIncomeDates(
+  income: IncomeItem,
+  targetMonth: DateTime
+): Array<{ date: DateTime; income: IncomeItem }> {
+  if (!income.period || !income.startDate) {
+    return [];
+  }
+
+  const results: Array<{ date: DateTime; income: IncomeItem }> = [];
+  const startDate = DateTime.fromISO(income.startDate, { zone: "utc" });
+  const endDate = income.endDate
+    ? DateTime.fromISO(income.endDate, { zone: "utc" })
+    : null;
+  const targetDateTime = targetMonth;
+  const targetYear = targetDateTime.year;
+  const targetMonthNum = targetDateTime.month;
+
+  // 시작일의 일자 추출 (예: 1월 1일이면 1일)
+  const startDay = startDate.day;
+
+  if (income.period === "monthly") {
+    // 월간 수입: 매월 시작일의 일자에 발생
+    const monthStart = DateTime.utc(targetYear, targetMonthNum, 1);
+    const monthEnd = monthStart.endOf("month");
+
+    // 시작일이 해당 월 내에 있는지 확인
+    if (startDate <= monthEnd) {
+      // 해당 월의 발생일 계산
+      const occurrenceDate = DateTime.utc(targetYear, targetMonthNum, startDay);
+
+      // 종료일이 있으면 확인
+      if (endDate && occurrenceDate > endDate) {
+        return [];
+      }
+
+      // 시작일 이후인지 확인
+      if (occurrenceDate >= startDate && occurrenceDate <= monthEnd) {
+        results.push({ date: occurrenceDate, income });
+      }
+    }
+  } else if (income.period === "yearly") {
+    // 연간 수입: 매년 시작일의 월/일에 발생
+    // 해당 월에만 표시되어야 함
+    const startMonth = startDate.month;
+    const startDay = startDate.day;
+
+    // 시작일의 월이 선택된 월과 일치하는지 확인
+    if (startMonth === targetMonthNum) {
+      const monthStart = DateTime.utc(targetYear, targetMonthNum, 1);
+      const monthEnd = monthStart.endOf("month");
+
+      const occurrenceDate = DateTime.utc(targetYear, startMonth, startDay);
+
+      // 종료일이 있으면 확인
+      if (endDate && occurrenceDate > endDate) {
+        return [];
+      }
+
+      // 시작일 이후인지 확인
+      if (occurrenceDate >= startDate && occurrenceDate <= monthEnd) {
+        results.push({ date: occurrenceDate, income });
+      }
+    }
+  }
+
+  return results;
+}
+
+// 날짜별로 그룹화하는 함수 (지출과 단일 거래 수입 + 반복 수입 통합)
 function groupByDate(
   expenses: ExpenseItem[],
-  incomes: IncomeItem[]
+  incomes: IncomeItem[],
+  targetMonth: DateTime
 ): Map<string, TransactionItem[]> {
   const grouped = new Map<string, TransactionItem[]>();
 
   // 지출 추가
   expenses.forEach((item) => {
-    const dateKey = new Date(item.date).toISOString().split("T")[0]; // YYYY-MM-DD 형식
+    const dateTime = DateTime.fromISO(item.date, { zone: "utc" });
+    const dateKey = dateTime.toFormat("yyyy-MM-dd"); // YYYY-MM-DD 형식
     if (!grouped.has(dateKey)) {
       grouped.set(dateKey, []);
     }
     grouped.get(dateKey)!.push(item);
   });
 
-  // 단일 거래 수입 추가 (date가 있는 수입만)
+  // 수입 추가 (단일 거래 + 반복 수입)
   incomes.forEach((item) => {
     if (item.date) {
-      const dateKey = new Date(item.date).toISOString().split("T")[0];
+      // 단일 거래 수입
+      const dateTime = DateTime.fromISO(item.date, { zone: "utc" });
+      const dateKey = dateTime.toFormat("yyyy-MM-dd");
       if (!grouped.has(dateKey)) {
         grouped.set(dateKey, []);
       }
       grouped.get(dateKey)!.push(item as TransactionItem);
+    } else if (item.period && item.startDate) {
+      // 반복 수입: 해당 기간의 실제 발생 날짜로 변환
+      const occurrences = getRecurringIncomeDates(item, targetMonth);
+      occurrences.forEach(({ date, income }) => {
+        const dateTime = date;
+        const dateKey = dateTime.toFormat("yyyy-MM-dd");
+        if (!grouped.has(dateKey)) {
+          grouped.set(dateKey, []);
+        }
+        // 반복 수입을 표시하기 위해 임시로 date를 추가한 객체 생성
+        grouped.get(dateKey)!.push({
+          ...income,
+          date: dateTime.toFormat("yyyy-MM-dd"),
+        } as TransactionItem);
+      });
     }
   });
 
@@ -270,41 +359,64 @@ function calculateDailyTotals(items: TransactionItem[]): {
 }
 
 // 날짜 포맷팅 함수
-function formatDate(date: Date): string {
-  const month = date.getMonth() + 1;
-  const day = date.getDate();
+function formatDate(date: DateTime): string {
   const weekdays = ["일", "월", "화", "수", "목", "금", "토"];
-  const weekday = weekdays[date.getDay()];
-  return `${month}월 ${day}일 (${weekday})`;
+  const weekday = weekdays[date.weekday % 7];
+  return `${date.month}월 ${date.day}일 (${weekday})`;
 }
 
 function MonthlySummaryCard({
   expenses,
   incomes,
+  selectedMonth,
 }: {
   expenses: ExpenseItem[];
   incomes: IncomeItem[];
+  selectedMonth: DateTime;
 }) {
-  // 단일 거래 수입만 필터링
+  // 단일 거래 수입 필터링
   const singleTransactionIncomes = incomes.filter((income) => income.date);
-  const allTransactions: TransactionItem[] = [
-    ...expenses,
-    ...(singleTransactionIncomes as TransactionItem[]),
-  ];
-  const totals = calculateDailyTotals(allTransactions);
+
+  // 반복 수입 중 해당 월에 발생하는 수입 계산
+  let recurringIncomeTotal = 0;
+  incomes.forEach((income) => {
+    if (income.period && income.startDate) {
+      // 반복 수입인 경우 해당 월에 발생하는지 확인
+      const occurrences = getRecurringIncomeDates(income, selectedMonth);
+      if (occurrences.length > 0) {
+        // 해당 월에 발생하는 반복 수입 금액 추가
+        recurringIncomeTotal += income.amount * occurrences.length;
+      }
+    }
+  });
+
+  // 단일 거래 수입 합계 계산
+  const singleIncomeTotal = singleTransactionIncomes.reduce(
+    (sum, income) => sum + income.amount,
+    0
+  );
+
+  // 총 수입 = 단일 거래 수입 + 반복 수입
+  const totalIncome = singleIncomeTotal + recurringIncomeTotal;
+
+  // 지출 합계 계산
+  const totalExpense = expenses.reduce(
+    (sum, expense) => sum + expense.amount,
+    0
+  );
 
   return (
     <div className="p-4 bg-accent/50 rounded-lg">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground mb-1">총 수입</p>
         <p className="text-sm font-semibold text-blue-600 dark:text-blue-400">
-          +{totals.income.toLocaleString()}원
+          +{totalIncome.toLocaleString()}원
         </p>
       </div>
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground mb-1">총 지출</p>
         <p className="text-sm font-semibold text-red-600 dark:text-red-400">
-          -{totals.expense.toLocaleString()}원
+          -{totalExpense.toLocaleString()}원
         </p>
       </div>
     </div>
@@ -324,7 +436,7 @@ function DailyExpenseList({
   onFilterChange,
   onSortChange,
 }: {
-  selectedMonth: Date;
+  selectedMonth: DateTime;
   expenses: ExpenseItem[];
   incomes: IncomeItem[];
   isLoading: boolean;
@@ -422,14 +534,14 @@ function DailyExpenseList({
     }
   };
 
-  // 단일 거래 수입 필터링 (date가 있는 수입만)
-  const singleTransactionIncomes = incomes.filter((income) => income.date);
+  // 날짜별로 그룹화 (지출 + 단일 거래 수입 + 반복 수입)
+  const allGroupedByDate = groupByDate(expenses, incomes, selectedMonth);
 
-  // 지출과 단일 거래 수입 통합
-  const allTransactions: TransactionItem[] = [
-    ...expenses,
-    ...(singleTransactionIncomes as TransactionItem[]),
-  ];
+  // 그룹화된 데이터를 평탄화하여 모든 거래 아이템 배열 생성
+  const allTransactions: TransactionItem[] = [];
+  allGroupedByDate.forEach((items) => {
+    allTransactions.push(...items);
+  });
 
   // 필터링
   const filteredTransactions = allTransactions.filter((item) => {
@@ -522,24 +634,32 @@ function DailyExpenseList({
     return 0;
   });
 
+  // 지출과 수입 분리
+  const filteredExpenses = sortedTransactions.filter(
+    (item) => "userId" in item && "budgetId" in item
+  ) as ExpenseItem[];
+  const filteredIncomes = sortedTransactions.filter(
+    (item) => !("userId" in item && "budgetId" in item)
+  ) as IncomeItem[];
+
   const groupedByDate = groupByDate(
-    sortedTransactions.filter(
-      (item) => "userId" in item && "budgetId" in item
-    ) as ExpenseItem[],
-    sortedTransactions.filter(
-      (item) => !("userId" in item && "budgetId" in item)
-    ) as IncomeItem[]
+    filteredExpenses,
+    filteredIncomes,
+    selectedMonth
   );
 
   // 날짜순 정렬 (정렬 옵션에 따라)
   const sortedDates = Array.from(groupedByDate.keys()).sort((a, b) => {
+    const dateA = DateTime.fromISO(a, { zone: "utc" });
+    const dateB = DateTime.fromISO(b, { zone: "utc" });
+
     if (sortBy.startsWith("date-")) {
       return sortBy === "date-desc"
-        ? new Date(b).getTime() - new Date(a).getTime()
-        : new Date(a).getTime() - new Date(b).getTime();
+        ? dateB.toMillis() - dateA.toMillis()
+        : dateA.toMillis() - dateB.toMillis();
     }
     // 금액 정렬일 때는 날짜는 최신순 유지
-    return new Date(b).getTime() - new Date(a).getTime();
+    return dateB.toMillis() - dateA.toMillis();
   });
 
   // 날짜 그룹 내에서도 금액 정렬 적용
@@ -707,7 +827,7 @@ function DailyExpenseList({
           {sortedDates.map((dateKey) => {
             const dateItems = groupedByDate.get(dateKey)!;
             const totals = calculateDailyTotals(dateItems);
-            const date = new Date(dateKey);
+            const date = DateTime.fromFormat(dateKey, "yyyy-MM-dd");
 
             return (
               <div key={dateKey} className="space-y-1">
@@ -744,11 +864,6 @@ function DailyExpenseList({
                       const IconComponent = getIconComponent(
                         expense.category.icon
                       );
-                      const expenseDate = new Date(expense.date);
-                      const timeStr = expenseDate.toLocaleTimeString("ko-KR", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      });
                       const isDeleting = deletingId === expense.id;
 
                       return (
@@ -766,7 +881,7 @@ function DailyExpenseList({
                             )}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-col gap-0.5">
                               <span className="font-medium">
                                 {expense.category.name}
                               </span>
@@ -775,9 +890,6 @@ function DailyExpenseList({
                                   {expense.description}
                                 </span>
                               )}
-                            </div>
-                            <div className="text-sm text-muted-foreground">
-                              {timeStr}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -858,16 +970,13 @@ function DailyExpenseList({
                           </div>
                         </div>
                       );
-                    } else if (income && income.date) {
-                      // 단일 거래 수입 아이템 렌더링
+                    } else if (income) {
+                      // 수입 아이템 렌더링 (단일 거래 + 반복 수입)
+
                       const IconComponent = income.category
                         ? getIconComponent(income.category.icon)
                         : null;
-                      const incomeDate = new Date(income.date);
-                      const timeStr = incomeDate.toLocaleTimeString("ko-KR", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      });
+
                       const categoryName =
                         income.category?.name || income.source || "수입";
                       const categoryIcon = income.category?.icon || "💰";
@@ -891,8 +1000,12 @@ function DailyExpenseList({
                                 {categoryName}
                               </span>
                             </div>
-                            <div className="text-sm text-muted-foreground">
-                              {timeStr}
+                            <div className="flex items-center gap-2">
+                              {income.source && (
+                                <span className="text-sm text-muted-foreground">
+                                  {income.source}
+                                </span>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -1182,28 +1295,66 @@ function DateExpenseDrawer({
   onOpenChange,
   selectedDate,
   expenses,
+  incomes,
   bookId,
   onExpenseUpdate,
+  onIncomeUpdate,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  selectedDate: Date | null;
+  selectedDate: DateTime | null;
   expenses: ExpenseItem[];
+  incomes: IncomeItem[];
   bookId: string | null;
   onExpenseUpdate: (bookId: string) => void;
+  onIncomeUpdate: (bookId: string) => void;
 }) {
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletingIncomeId, setDeletingIncomeId] = useState<string | null>(null);
 
   if (!selectedDate) return null;
 
-  const dateKey = selectedDate.toISOString().split("T")[0];
+  const dateKey = selectedDate.toFormat("yyyy-MM-dd");
+  const selectedMonth = new Date(selectedDate.year, selectedDate.month, 1);
+
+  // 해당 날짜의 지출 필터링
   const dateExpenses = expenses.filter(
     (expense) => new Date(expense.date).toISOString().split("T")[0] === dateKey
   );
-  const totals = calculateDailyTotals(dateExpenses);
+
+  // 해당 날짜의 수입 필터링 (단일 거래 + 반복 수입)
+  const dateIncomes: TransactionItem[] = [];
+
+  incomes.forEach((income) => {
+    if (income.date) {
+      // 단일 거래 수입
+      console.log("income.date, dateKey", income.date, dateKey);
+      if (income.date === dateKey) {
+        dateIncomes.push(income as TransactionItem);
+      }
+    } else if (income.period && income.startDate) {
+      // 반복 수입: 해당 날짜에 발생하는지 확인
+      const occurrences = getRecurringIncomeDates(income, selectedDate);
+      const hasOccurrence = occurrences.some(
+        ({ date }) => date.toFormat("yyyy-MM-dd") === dateKey
+      );
+      if (hasOccurrence) {
+        // 반복 수입을 표시하기 위해 임시로 date를 추가한 객체 생성
+        dateIncomes.push({
+          ...income,
+          date: dateKey,
+        } as TransactionItem);
+      }
+    }
+  });
+
+  // 지출과 수입 통합
+  const allTransactions: TransactionItem[] = [...dateExpenses, ...dateIncomes];
+
+  const totals = calculateDailyTotals(allTransactions);
 
   // 시간순 정렬
-  const sortedExpenses = [...dateExpenses].sort((a, b) => {
+  const sortedTransactions = [...allTransactions].sort((a, b) => {
     const aDate = new Date(a.createdAt).getTime();
     const bDate = new Date(b.createdAt).getTime();
     return bDate - aDate;
@@ -1278,124 +1429,287 @@ function DateExpenseDrawer({
         </DrawerHeader>
         <div className="overflow-y-auto max-h-[70vh] px-4 pb-4">
           <div className="space-y-2 pt-2">
-            {sortedExpenses.length === 0 ? (
+            {sortedTransactions.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 해당 날짜에 거래 내역이 없습니다.
               </div>
             ) : (
-              sortedExpenses.map((expense) => {
-                const IconComponent = getIconComponent(expense.category.icon);
-                const expenseDate = new Date(expense.date);
-                const timeStr = expenseDate.toLocaleTimeString("ko-KR", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                });
-                const isDeleting = deletingId === expense.id;
+              sortedTransactions.map((transaction) => {
+                // ExpenseItem인지 IncomeItem인지 확인
+                const isExpense =
+                  "userId" in transaction && "budgetId" in transaction;
+                const expense = isExpense ? (transaction as ExpenseItem) : null;
+                const income = !isExpense ? (transaction as IncomeItem) : null;
 
-                return (
-                  <div
-                    key={expense.id}
-                    className="flex items-center gap-4 p-3 rounded-lg bg-card hover:bg-accent/50 transition-colors"
-                  >
-                    <div className="flex items-center justify-center w-10 h-10 rounded-md bg-muted">
-                      {IconComponent ? (
-                        <IconComponent className="h-5 w-5 text-muted-foreground" />
-                      ) : (
-                        <span className="text-lg">
-                          {expense.category.icon || "📦"}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">
-                          {expense.category.name}
-                        </span>
-                        {expense.description && (
-                          <span className="text-sm text-muted-foreground">
-                            {expense.description}
+                if (expense) {
+                  // 지출 아이템 렌더링
+                  const IconComponent = getIconComponent(expense.category.icon);
+                  const expenseDate = new Date(expense.date);
+                  const timeStr = expenseDate.toLocaleTimeString("ko-KR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  });
+                  const isDeleting = deletingId === expense.id;
+
+                  return (
+                    <div
+                      key={expense.id}
+                      className="flex items-center gap-4 p-3 rounded-lg bg-card hover:bg-accent/50 transition-colors"
+                    >
+                      <div className="flex items-center justify-center w-10 h-10 rounded-md bg-muted">
+                        {IconComponent ? (
+                          <IconComponent className="h-5 w-5 text-muted-foreground" />
+                        ) : (
+                          <span className="text-lg">
+                            {expense.category.icon || "📦"}
                           </span>
                         )}
                       </div>
-                      <div className="text-sm text-muted-foreground">
-                        {timeStr}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="text-right">
-                        <div
-                          className={`text-sm ${
-                            expense.category.type === "income"
-                              ? "text-blue-600 dark:text-blue-400"
-                              : "text-red-600 dark:text-red-400"
-                          }`}
-                        >
-                          {expense.category.type === "income" ? "+" : "-"}
-                          {expense.amount.toLocaleString()}원
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-medium">
+                            {expense.category.name}
+                          </span>
+                          <div className="text-sm text-muted-foreground">
+                            {timeStr}
+                          </div>
+                          {expense.description && (
+                            <span className="text-sm text-muted-foreground">
+                              {expense.description}
+                            </span>
+                          )}
                         </div>
                       </div>
-                      {expense.category.type === "expense" && bookId && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              disabled={isDeleting}
-                            >
-                              {isDeleting ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <MoreVertical className="h-4 w-4" />
-                              )}
-                              <span className="sr-only">메뉴</span>
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem asChild>
-                              <Link href={`/book/edit/${expense.id}`}>
-                                <Edit2 className="mr-2 h-4 w-4" />
-                                수정
-                              </Link>
-                            </DropdownMenuItem>
-                            <AlertDialog>
-                              <AlertDialogTrigger asChild>
-                                <DropdownMenuItem
-                                  onSelect={(e) => e.preventDefault()}
-                                  className="text-destructive focus:text-destructive"
-                                >
-                                  <Trash2 className="mr-2 h-4 w-4" />
-                                  삭제
-                                </DropdownMenuItem>
-                              </AlertDialogTrigger>
-                              <AlertDialogContent>
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle>지출 삭제</AlertDialogTitle>
-                                  <AlertDialogDescription>
-                                    정말로 이 지출을 삭제하시겠습니까?
-                                    <br />이 작업은 되돌릴 수 없습니다.
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel>취소</AlertDialogCancel>
-                                  <AlertDialogAction
-                                    onClick={() => handleDelete(expense.id)}
-                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      <div className="flex items-center gap-2">
+                        <div className="text-right">
+                          <div
+                            className={`text-sm ${
+                              expense.category.type === "income"
+                                ? "text-blue-600 dark:text-blue-400"
+                                : "text-red-600 dark:text-red-400"
+                            }`}
+                          >
+                            {expense.category.type === "income" ? "+" : "-"}
+                            {expense.amount.toLocaleString()}원
+                          </div>
+                        </div>
+                        {expense.category.type === "expense" && bookId && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                disabled={isDeleting}
+                              >
+                                {isDeleting ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <MoreVertical className="h-4 w-4" />
+                                )}
+                                <span className="sr-only">메뉴</span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem asChild>
+                                <Link href={`/book/edit/${expense.id}`}>
+                                  <Edit2 className="mr-2 h-4 w-4" />
+                                  수정
+                                </Link>
+                              </DropdownMenuItem>
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <DropdownMenuItem
+                                    onSelect={(e) => e.preventDefault()}
+                                    className="text-destructive focus:text-destructive"
                                   >
+                                    <Trash2 className="mr-2 h-4 w-4" />
                                     삭제
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
+                                  </DropdownMenuItem>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>
+                                      지출 삭제
+                                    </AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      정말로 이 지출을 삭제하시겠습니까?
+                                      <br />이 작업은 되돌릴 수 없습니다.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>취소</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={() => handleDelete(expense.id)}
+                                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                    >
+                                      삭제
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
+                  );
+                } else if (income) {
+                  // 수입 아이템 렌더링
+                  const incomeDate = new Date(income.date!);
+                  const timeStr = incomeDate.toLocaleTimeString("ko-KR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  });
+                  const isDeleting = deletingIncomeId === income.id;
+
+                  const IconComponent = income.category
+                    ? getIconComponent(income.category.icon)
+                    : null;
+                  const categoryName =
+                    income.category?.name || income.source || "수입";
+                  const categoryIcon = income.category?.icon || "💰";
+
+                  const handleIncomeDelete = async () => {
+                    if (!bookId) {
+                      toast.error("가계부를 찾을 수 없습니다.");
+                      return;
+                    }
+
+                    setDeletingIncomeId(income.id);
+
+                    try {
+                      const response = await fetch(
+                        `/api/book/${bookId}/income/${income.id}`,
+                        {
+                          method: "DELETE",
+                        }
+                      );
+
+                      if (!response.ok) {
+                        let errorMessage = "수입 삭제에 실패했습니다.";
+                        try {
+                          const errorData = await response.json();
+                          errorMessage = errorData.error || errorMessage;
+                        } catch {
+                          // JSON 파싱 실패 시 기본 메시지 사용
+                        }
+                        throw new Error(errorMessage);
+                      }
+
+                      toast.success("수입이 삭제되었습니다.");
+                      if (bookId) {
+                        onIncomeUpdate(bookId);
+                      }
+                      onOpenChange(false);
+                    } catch (error) {
+                      console.error("수입 삭제 오류:", error);
+                      toast.error(
+                        error instanceof Error
+                          ? error.message
+                          : "수입 삭제에 실패했습니다."
+                      );
+                    } finally {
+                      setDeletingIncomeId(null);
+                    }
+                  };
+
+                  return (
+                    <div
+                      key={income.id}
+                      className="flex items-center gap-4 p-3 rounded-lg bg-card hover:bg-accent/50 transition-colors"
+                    >
+                      <div className="flex items-center justify-center w-10 h-10 rounded-md bg-muted">
+                        {IconComponent ? (
+                          <IconComponent className="h-5 w-5 text-muted-foreground" />
+                        ) : (
+                          <span className="text-lg">{categoryIcon}</span>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{categoryName}</span>
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          {timeStr}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-right">
+                          <div className="text-sm text-blue-600 dark:text-blue-400">
+                            +{income.amount.toLocaleString()}원
+                          </div>
+                        </div>
+                        {bookId && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                disabled={isDeleting}
+                              >
+                                {isDeleting ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <MoreVertical className="h-4 w-4" />
+                                )}
+                                <span className="sr-only">메뉴</span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem asChild>
+                                <Link
+                                  href={`/book/edit/${income.id}?type=income`}
+                                >
+                                  <Edit2 className="mr-2 h-4 w-4" />
+                                  수정
+                                </Link>
+                              </DropdownMenuItem>
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <DropdownMenuItem
+                                    onSelect={(e) => e.preventDefault()}
+                                    className="text-destructive focus:text-destructive"
+                                  >
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    삭제
+                                  </DropdownMenuItem>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>
+                                      수입 삭제
+                                    </AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      정말로 이 수입을 삭제하시겠습니까?
+                                      <br />이 작업은 되돌릴 수 없습니다.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>취소</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={handleIncomeDelete}
+                                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                    >
+                                      삭제
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
               })
             )}
-            <Link href="/book/add">
+            <Link
+              href={`/book/add?date=${selectedDate.toFormat("yyyy-MM-dd")}`}
+            >
               <button className="w-full flex items-center gap-4 p-3 rounded-lg bg-card hover:bg-accent/50 transition-colors">
                 <div className="flex items-center justify-center w-10 h-10 rounded-md bg-muted">
                   <Plus className="h-5 w-5 text-muted-foreground" />
@@ -1445,28 +1759,22 @@ export default function BookPage() {
 
   const getInitialDate = () => {
     const month = searchParams.get("month");
-    if (month) {
-      const [year, monthNum] = month.split("-").map(Number);
-      if (year && monthNum && monthNum >= 1 && monthNum <= 12) {
-        return new Date(year, monthNum - 1, 1);
-      }
+    if (!month) {
+      return DateTime.now();
+    } else {
+      return DateTime.fromFormat(month, "yyyy-MM", { zone: "utc" });
     }
-    return new Date();
   };
 
-  const getInitialType = () => {
-    const type = searchParams.get("type");
-    return type === "income" ? "income" : "expense";
-  };
-
-  const [activeType, setActiveType] = useState<string>(getInitialType());
+  // 수입 탭 제거로 인해 activeType 제거됨
   const [activeView, setActiveView] = useState<string>(getInitialView());
-  const [selectedDate, setSelectedDate] = useState<Date>(getInitialDate());
-  const [typeFilter, setTypeFilter] = useState<string>(getInitialFilter());
-  const [sortBy, setSortBy] = useState<string>(getInitialSort());
-  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | null>(
-    null
+  const [selectedDate, setSelectedDate] = useState<DateTime>(getInitialDate());
+  const [typeFilter, setTypeFilter] = useState<"all" | "income" | "expense">(
+    getInitialFilter() as "all" | "income" | "expense"
   );
+  const [sortBy, setSortBy] = useState<string>(getInitialSort());
+  const [selectedCalendarDate, setSelectedCalendarDate] =
+    useState<DateTime | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [bookId, setBookId] = useState<string | null>(null);
   const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
@@ -1484,13 +1792,7 @@ export default function BookPage() {
     }) => {
       const params = new URLSearchParams(searchParams.toString());
 
-      if (updates.type !== undefined) {
-        if (updates.type === "expense") {
-          params.delete("type");
-        } else {
-          params.set("type", updates.type);
-        }
-      }
+      // 수입 탭 제거로 인해 type 파라미터 제거
 
       if (updates.view !== undefined) {
         if (updates.view === "daily") {
@@ -1517,11 +1819,7 @@ export default function BookPage() {
       }
 
       if (updates.month !== undefined) {
-        const now = new Date();
-        const currentMonth = `${now.getFullYear()}-${String(
-          now.getMonth() + 1
-        ).padStart(2, "0")}`;
-        if (updates.month === currentMonth) {
+        if (updates.month === DateTime.now().toFormat("yyyy-MM")) {
           params.delete("month");
         } else {
           params.set("month", updates.month);
@@ -1536,11 +1834,7 @@ export default function BookPage() {
     [router, searchParams]
   );
 
-  // 상태 변경 핸들러
-  const handleTypeChange = (type: string) => {
-    setActiveType(type);
-    updateURLParams({ type });
-  };
+  // 수입 탭 제거로 인해 handleTypeChange 제거
 
   const handleViewChange = (view: string) => {
     setActiveView(view);
@@ -1548,7 +1842,7 @@ export default function BookPage() {
   };
 
   const handleFilterChange = (filter: string) => {
-    setTypeFilter(filter);
+    setTypeFilter(filter as "all" | "income" | "expense");
     updateURLParams({ filter });
   };
 
@@ -1557,11 +1851,9 @@ export default function BookPage() {
     updateURLParams({ sort });
   };
 
-  const handleDateChange = (date: Date) => {
+  const handleDateChange = (date: DateTime) => {
     setSelectedDate(date);
-    const monthStr = `${date.getFullYear()}-${String(
-      date.getMonth() + 1
-    ).padStart(2, "0")}`;
+    const monthStr = date.toFormat("yyyy-MM");
     updateURLParams({ month: monthStr });
   };
 
@@ -1573,9 +1865,7 @@ export default function BookPage() {
     const filter = searchParams.get("filter");
     const month = searchParams.get("month");
 
-    if (type === "income" || type === "expense") {
-      setActiveType(type);
-    }
+    // 수입 탭 제거로 인해 type 파라미터 처리 제거
 
     if (view === "calendar" || view === "daily") {
       setActiveView(view);
@@ -1600,18 +1890,10 @@ export default function BookPage() {
     if (filter) {
       const validFilters = ["all", "income", "expense"];
       if (validFilters.includes(filter)) {
-        setTypeFilter(filter);
+        setTypeFilter(filter as "all" | "income" | "expense");
       }
     } else {
       setTypeFilter("all");
-    }
-
-    if (month) {
-      const [year, monthNum] = month.split("-").map(Number);
-      if (year && monthNum && monthNum >= 1 && monthNum <= 12) {
-        const newDate = new Date(year, monthNum - 1, 1);
-        setSelectedDate(newDate);
-      }
     }
   }, [searchParams]);
 
@@ -1656,17 +1938,15 @@ export default function BookPage() {
       loadExpenses(bookId);
       loadIncomes(bookId);
     }
-  }, [selectedDate, bookId, activeType]);
+  }, [selectedDate, bookId]);
 
   const loadExpenses = async (id: string) => {
     try {
-      const year = selectedDate.getFullYear();
-      const month = selectedDate.getMonth();
-      const startDate = new Date(year, month, 1);
-      const endDate = new Date(year, month + 1, 0, 23, 59, 59, 999);
+      const startDate = selectedDate.startOf("month");
+      const endDate = startDate.plus({ month: 1 });
 
       const response = await fetch(
-        `/api/book/${id}/expense?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
+        `/api/book/${id}/expense?startDate=${startDate.toISODate()}&endDate=${endDate.toISODate()}`
       );
 
       if (!response.ok) {
@@ -1687,13 +1967,11 @@ export default function BookPage() {
 
   const loadIncomes = async (id: string) => {
     try {
-      const year = selectedDate.getFullYear();
-      const month = selectedDate.getMonth();
-      const startDate = new Date(year, month, 1);
-      const endDate = new Date(year, month + 1, 0, 23, 59, 59, 999);
+      const startDate = selectedDate;
+      const endDate = startDate.plus({ month: 1 });
 
       const response = await fetch(
-        `/api/book/${id}/income?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
+        `/api/book/${id}/income?startDate=${startDate.toISODate()}&endDate=${endDate.toISODate()}`
       );
 
       if (!response.ok) {
@@ -1712,7 +1990,7 @@ export default function BookPage() {
     }
   };
 
-  const handleCalendarDateSelect = (date: Date) => {
+  const handleCalendarDateSelect = (date: DateTime) => {
     setSelectedCalendarDate(date);
     setDrawerOpen(true);
   };
@@ -1721,77 +1999,124 @@ export default function BookPage() {
     <AppLayout
       breadcrumbs={[{ label: "홈", href: "/home" }, { label: "가계부" }]}
     >
-      <Tabs value={activeType} onValueChange={handleTypeChange}>
+      <div className="space-y-4">
         <div className="flex items-center justify-between mb-4">
           <MonthSelector
             selectedDate={selectedDate}
             onDateChange={handleDateChange}
           />
-          <TabsList>
-            <TabsTrigger value="expense">지출</TabsTrigger>
-            <TabsTrigger value="income">수입</TabsTrigger>
-          </TabsList>
+          <Tabs value={activeView} onValueChange={handleViewChange}>
+            <TabsList>
+              <TabsTrigger value="daily">일별</TabsTrigger>
+              <TabsTrigger value="calendar">캘린더</TabsTrigger>
+            </TabsList>
+          </Tabs>
         </div>
 
-        {activeType === "expense" && (
-          <>
-            <MonthlySummaryCard expenses={expenses} incomes={incomes} />
-            <Tabs value={activeView} onValueChange={handleViewChange}>
-              <div className="flex items-center justify-end mb-4">
-                <TabsList>
-                  <TabsTrigger value="daily">일별</TabsTrigger>
-                  <TabsTrigger value="calendar">캘린더</TabsTrigger>
-                </TabsList>
+        <MonthlySummaryCard
+          expenses={expenses}
+          incomes={incomes}
+          selectedMonth={selectedDate}
+        />
+        <Tabs value={activeView} onValueChange={handleViewChange}>
+          <TabsContent value="daily">
+            <DailyExpenseList
+              selectedMonth={selectedDate}
+              expenses={expenses}
+              incomes={incomes}
+              isLoading={isLoading}
+              bookId={bookId}
+              onExpenseUpdate={loadExpenses}
+              onIncomeUpdate={loadIncomes}
+              typeFilter={typeFilter}
+              sortBy={sortBy}
+              onFilterChange={handleFilterChange}
+              onSortChange={handleSortChange}
+            />
+          </TabsContent>
+          <TabsContent value="calendar">
+            <div className="space-y-4">
+              {/* 필터 및 정렬 UI */}
+              <div className="flex flex-wrap items-center gap-2 justify-end">
+                <Drawer>
+                  <DrawerTrigger asChild>
+                    <Button variant="ghost" size="sm" className="gap-2">
+                      <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm">
+                        {typeFilter === "all"
+                          ? "전체"
+                          : typeFilter === "income"
+                          ? "수입"
+                          : "지출"}
+                      </span>
+                    </Button>
+                  </DrawerTrigger>
+                  <DrawerContent>
+                    <DrawerHeader>
+                      <DrawerTitle>필터</DrawerTitle>
+                    </DrawerHeader>
+                    <div className="px-4 pb-4 space-y-4">
+                      <div className="space-y-2">
+                        <h3 className="text-sm font-medium">유형</h3>
+                        <ButtonGroup aria-label="유형" className="w-full">
+                          <Button
+                            variant={
+                              typeFilter === "all" ? "default" : "outline"
+                            }
+                            onClick={() => handleFilterChange("all")}
+                            className="flex-1"
+                          >
+                            전체
+                          </Button>
+                          <Button
+                            variant={
+                              typeFilter === "income" ? "default" : "outline"
+                            }
+                            onClick={() => handleFilterChange("income")}
+                            className="flex-1"
+                          >
+                            수입
+                          </Button>
+                          <Button
+                            variant={
+                              typeFilter === "expense" ? "default" : "outline"
+                            }
+                            onClick={() => handleFilterChange("expense")}
+                            className="flex-1"
+                          >
+                            지출
+                          </Button>
+                        </ButtonGroup>
+                      </div>
+                    </div>
+                  </DrawerContent>
+                </Drawer>
               </div>
-
-              <TabsContent value="daily">
-                <DailyExpenseList
-                  selectedMonth={selectedDate}
-                  expenses={expenses}
-                  incomes={incomes}
-                  isLoading={isLoading}
-                  bookId={bookId}
-                  onExpenseUpdate={loadExpenses}
-                  onIncomeUpdate={loadIncomes}
-                  typeFilter={typeFilter}
-                  sortBy={sortBy}
-                  onFilterChange={handleFilterChange}
-                  onSortChange={handleSortChange}
-                />
-              </TabsContent>
-              <TabsContent value="calendar">
-                <ExpenseCalendar
-                  month={selectedDate}
-                  expenses={expenses}
-                  onDateSelect={handleCalendarDateSelect}
-                />
-              </TabsContent>
-            </Tabs>
-          </>
-        )}
-
-        {activeType === "income" && (
-          <IncomeList
-            selectedMonth={selectedDate}
-            incomes={incomes.filter((income) => income.period !== null)}
-            isLoading={isLoading}
-            bookId={bookId}
-            onIncomeUpdate={loadIncomes}
-          />
-        )}
-      </Tabs>
+              <ExpenseCalendar
+                month={selectedDate}
+                expenses={expenses}
+                incomes={incomes}
+                onDateSelect={handleCalendarDateSelect}
+                typeFilter={typeFilter}
+              />
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
 
       <DateExpenseDrawer
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
         selectedDate={selectedCalendarDate}
         expenses={expenses}
+        incomes={incomes}
         bookId={bookId}
         onExpenseUpdate={loadExpenses}
+        onIncomeUpdate={loadIncomes}
       />
 
       {/* Floating Action Button */}
-      <Link href="/book/add">
+      <Link href={`/book/add?month=${selectedDate.toFormat("yyyy-MM")}`}>
         <Button
           size="icon"
           className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-lg z-50"

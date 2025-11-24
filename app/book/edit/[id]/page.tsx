@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { AppLayout } from "@/components/app-layout";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,6 +43,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { DateTime } from "luxon";
 
 // 카테고리 타입 정의
 interface Category {
@@ -152,7 +153,9 @@ function CategoryDrawer({
               {type === "expense" ? "지출" : "수입"} 카테고리가 없습니다.
               <br />
               <Link
-                href={bookId ? `/book/${bookId}/category/add` : "/book/category"}
+                href={
+                  bookId ? `/book/${bookId}/category/add` : "/book/category"
+                }
                 className="text-primary hover:underline"
               >
                 카테고리 추가하기
@@ -227,7 +230,7 @@ function ExpenseForm({
   const router = useRouter();
   const [memo, setMemo] = useState("");
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState<Date | undefined>(undefined);
+  const [date, setDate] = useState<DateTime | null>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -240,37 +243,41 @@ function ExpenseForm({
       if (!bookId) return;
 
       try {
-        // 최근 1년치 지출을 조회하여 해당 지출 찾기
-        const now = new Date();
-        const startDate = new Date(now.getFullYear() - 1, 0, 1);
-        const endDate = new Date(now.getFullYear() + 1, 11, 31, 23, 59, 59, 999);
-
+        // expenseId로 직접 조회
         const response = await fetch(
-          `/api/book/${bookId}/expense?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
+          `/api/book/${bookId}/expense/${expenseId}`
         );
         if (!response.ok) {
+          if (response.status === 404) {
+            toast.error("지출을 찾을 수 없습니다.");
+            router.push("/book");
+            return;
+          }
           throw new Error("지출 조회에 실패했습니다.");
         }
 
-        const data = await response.json();
-        const expense = data.expenses?.find(
-          (e: Expense) => e.id === expenseId
-        );
-
-        if (!expense) {
-          toast.error("지출을 찾을 수 없습니다.");
-          router.push("/book");
-          return;
-        }
+        const expense = await response.json();
 
         setCategoryId(expense.categoryId);
         setAmount(expense.amount.toString());
-        setDate(new Date(expense.date));
+        // API에서 반환되는 날짜를 DateTime 객체로 변환
+        // JSON 직렬화로 인해 날짜는 ISO 문자열 형식으로 반환됨
+        if (expense.date) {
+          const dateValue =
+            typeof expense.date === "string"
+              ? DateTime.fromISO(expense.date)
+              : DateTime.fromJSDate(new Date(expense.date));
+          setDate(dateValue.isValid ? dateValue : null);
+        } else {
+          setDate(null);
+        }
         setMemo(expense.description || "");
       } catch (error) {
         console.error("지출 로드 오류:", error);
         toast.error(
-          error instanceof Error ? error.message : "지출을 불러오는데 실패했습니다."
+          error instanceof Error
+            ? error.message
+            : "지출을 불러오는데 실패했습니다."
         );
         router.push("/book");
       } finally {
@@ -318,7 +325,7 @@ function ExpenseForm({
         body: JSON.stringify({
           categoryId,
           amount: Number(amount),
-          date: date.toISOString(),
+          date: date.toFormat("yyyy-MM-dd"),
           description: memo.trim() || null,
         }),
       });
@@ -360,7 +367,7 @@ function ExpenseForm({
 
       // 응답이 성공이면 (200-299 범위)
       await response.json().catch(() => ({ success: true }));
-      
+
       toast.success("지출이 삭제되었습니다.");
       onDelete();
     } catch (error) {
@@ -435,17 +442,19 @@ function ExpenseForm({
               id="date"
               className="w-full justify-between font-normal"
             >
-              {date ? date.toLocaleDateString("ko-KR") : "날짜 선택"}
+              {date ? date.toLocaleString() : "날짜 선택"}
               <ChevronDownIcon />
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-auto overflow-hidden p-0" align="start">
             <Calendar
               mode="single"
-              selected={date}
+              selected={date ? date.toJSDate() : undefined}
               captionLayout="dropdown"
               onSelect={(date) => {
-                setDate(date);
+                if (date) {
+                  setDate(DateTime.fromJSDate(date));
+                }
                 setCalendarOpen(false);
               }}
             />
@@ -464,11 +473,7 @@ function ExpenseForm({
       </div>
 
       <div className="flex gap-2">
-        <Button
-          onClick={handleSave}
-          disabled={isSaving}
-          className="flex-1"
-        >
+        <Button onClick={handleSave} disabled={isSaving} className="flex-1">
           {isSaving ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -503,8 +508,7 @@ function ExpenseForm({
               <AlertDialogTitle>지출 삭제</AlertDialogTitle>
               <AlertDialogDescription>
                 정말로 이 지출을 삭제하시겠습니까?
-                <br />
-                이 작업은 되돌릴 수 없습니다.
+                <br />이 작업은 되돌릴 수 없습니다.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -540,8 +544,8 @@ function IncomeForm({
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [period, setPeriod] = useState<"monthly" | "yearly">("monthly");
-  const [startDate, setStartDate] = useState<Date | undefined>(undefined);
-  const [endDate, setEndDate] = useState<Date | undefined>(undefined);
+  const [startDate, setStartDate] = useState<DateTime | null>(null);
+  const [endDate, setEndDate] = useState<DateTime | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [endDateCalendarOpen, setEndDateCalendarOpen] = useState(false);
   const [hasEndDate, setHasEndDate] = useState(false);
@@ -560,41 +564,52 @@ function IncomeForm({
       if (!bookId) return;
 
       try {
-        // 최근 1년치 수입을 조회하여 해당 수입 찾기
-        const now = new Date();
-        const startDate = new Date(now.getFullYear() - 1, 0, 1);
-        const endDate = new Date(now.getFullYear() + 1, 11, 31, 23, 59, 59, 999);
-
-        const response = await fetch(
-          `/api/book/${bookId}/income?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
-        );
+        // incomeId로 직접 조회
+        const response = await fetch(`/api/book/${bookId}/income/${incomeId}`);
         if (!response.ok) {
+          if (response.status === 404) {
+            toast.error("수입을 찾을 수 없습니다.");
+            router.push("/book?type=income");
+            return;
+          }
           throw new Error("수입 조회에 실패했습니다.");
         }
 
-        const data = await response.json();
-        const income = data.incomes?.find(
-          (i: Income & { category?: { id: string; name: string; icon: string | null; type: string } }) => i.id === incomeId
+        const income = await response.json();
+
+        setCategoryId(
+          income.categoryId || (income as any).category?.id || null
         );
-
-        if (!income) {
-          toast.error("수입을 찾을 수 없습니다.");
-          router.push("/book?type=income");
-          return;
-        }
-
-        setCategoryId(income.categoryId || (income as any).category?.id || null);
         setAmount(income.amount.toString());
         setPeriod(income.period);
-        setStartDate(new Date(income.startDate));
+        // API에서 반환되는 날짜를 DateTime 객체로 변환
+        // JSON 직렬화로 인해 날짜는 ISO 문자열 형식으로 반환됨
+        if (income.startDate) {
+          const startDateValue =
+            typeof income.startDate === "string"
+              ? DateTime.fromISO(income.startDate)
+              : DateTime.fromJSDate(new Date(income.startDate));
+          setStartDate(startDateValue.isValid ? startDateValue : null);
+        } else {
+          setStartDate(null);
+        }
         if (income.endDate) {
-          setEndDate(new Date(income.endDate));
+          const endDateValue =
+            typeof income.endDate === "string"
+              ? DateTime.fromISO(income.endDate)
+              : DateTime.fromJSDate(new Date(income.endDate));
+          setEndDate(endDateValue.isValid ? endDateValue : null);
           setHasEndDate(true);
+        } else {
+          setEndDate(null);
+          setHasEndDate(false);
         }
       } catch (error) {
         console.error("수입 로드 오류:", error);
         toast.error(
-          error instanceof Error ? error.message : "수입을 불러오는데 실패했습니다."
+          error instanceof Error
+            ? error.message
+            : "수입을 불러오는데 실패했습니다."
         );
         router.push("/book?type=income");
       } finally {
@@ -640,8 +655,9 @@ function IncomeForm({
           period,
           source: null, // 카테고리 이름으로 대체
           incomeType: "actual", // 기본값: 실제 수입
-          startDate: startDate.toISOString(),
-          endDate: hasEndDate && endDate ? endDate.toISOString() : null,
+          startDate: startDate ? startDate.toFormat("yyyy-MM-dd") : null,
+          endDate:
+            hasEndDate && endDate ? endDate.toFormat("yyyy-MM-dd") : null,
         }),
       });
 
@@ -681,7 +697,7 @@ function IncomeForm({
       }
 
       await response.json().catch(() => ({ success: true }));
-      
+
       toast.success("수입이 삭제되었습니다.");
       onDelete();
     } catch (error) {
@@ -778,17 +794,19 @@ function IncomeForm({
               id="startDate"
               className="w-full justify-between font-normal"
             >
-              {startDate ? startDate.toLocaleDateString("ko-KR") : "날짜 선택"}
+              {startDate ? startDate.toLocaleString() : "날짜 선택"}
               <ChevronDownIcon />
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-auto overflow-hidden p-0" align="start">
             <Calendar
               mode="single"
-              selected={startDate}
+              selected={startDate ? startDate.toJSDate() : undefined}
               captionLayout="dropdown"
               onSelect={(date) => {
-                setStartDate(date);
+                if (date) {
+                  setStartDate(DateTime.fromJSDate(date));
+                }
                 setCalendarOpen(false);
               }}
             />
@@ -805,7 +823,7 @@ function IncomeForm({
             onChange={(e) => {
               setHasEndDate(e.target.checked);
               if (!e.target.checked) {
-                setEndDate(undefined);
+                setEndDate(null);
               }
             }}
             className="h-4 w-4 rounded border-gray-300"
@@ -815,23 +833,31 @@ function IncomeForm({
           </Label>
         </div>
         {hasEndDate && (
-          <Popover open={endDateCalendarOpen} onOpenChange={setEndDateCalendarOpen}>
+          <Popover
+            open={endDateCalendarOpen}
+            onOpenChange={setEndDateCalendarOpen}
+          >
             <PopoverTrigger asChild>
               <Button
                 variant="outline"
                 className="w-full justify-between font-normal"
               >
-                {endDate ? endDate.toLocaleDateString("ko-KR") : "날짜 선택"}
+                {endDate ? endDate.toLocaleString() : "날짜 선택"}
                 <ChevronDownIcon />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-auto overflow-hidden p-0" align="start">
+            <PopoverContent
+              className="w-auto overflow-hidden p-0"
+              align="start"
+            >
               <Calendar
                 mode="single"
-                selected={endDate}
+                selected={endDate ? endDate.toJSDate() : undefined}
                 captionLayout="dropdown"
                 onSelect={(date) => {
-                  setEndDate(date);
+                  if (date) {
+                    setEndDate(DateTime.fromJSDate(date));
+                  }
                   setEndDateCalendarOpen(false);
                 }}
               />
@@ -841,11 +867,7 @@ function IncomeForm({
       </div>
 
       <div className="flex gap-2">
-        <Button
-          onClick={handleSave}
-          disabled={isSaving}
-          className="flex-1"
-        >
+        <Button onClick={handleSave} disabled={isSaving} className="flex-1">
           {isSaving ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -880,8 +902,7 @@ function IncomeForm({
               <AlertDialogTitle>수입 삭제</AlertDialogTitle>
               <AlertDialogDescription>
                 정말로 이 수입을 삭제하시겠습니까?
-                <br />
-                이 작업은 되돌릴 수 없습니다.
+                <br />이 작업은 되돌릴 수 없습니다.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -942,7 +963,9 @@ export default function EditExpensePage() {
       } catch (error) {
         console.error("데이터 로드 오류:", error);
         toast.error(
-          error instanceof Error ? error.message : "데이터를 불러오는데 실패했습니다."
+          error instanceof Error
+            ? error.message
+            : "데이터를 불러오는데 실패했습니다."
         );
       } finally {
         setIsLoading(false);
@@ -952,13 +975,37 @@ export default function EditExpensePage() {
     loadData();
   }, [router, type]);
 
-  const handleSave = () => {
-    router.push(`/book?type=${type}`);
-  };
+  const handleSave = useCallback(() => {
+    // searchParams 유지하면서 목록 페이지로 이동
+    // window.location.search를 사용하여 최신 쿼리 파라미터를 가져옴
+    const params = new URLSearchParams(window.location.search);
+    // type 파라미터를 filter로 변환 (목록 페이지에서 filter를 사용)
+    if (type === "income") {
+      params.set("filter", "income");
+    } else if (type === "expense") {
+      params.set("filter", "expense");
+    }
+    // type 파라미터 제거 (목록 페이지에서는 filter를 사용)
+    params.delete("type");
+    const queryString = params.toString();
+    router.push(`/book${queryString ? `?${queryString}` : ""}`);
+  }, [router, type]);
 
-  const handleDelete = () => {
-    router.push(`/book?type=${type}`);
-  };
+  const handleDelete = useCallback(() => {
+    // searchParams 유지하면서 목록 페이지로 이동
+    // window.location.search를 사용하여 최신 쿼리 파라미터를 가져옴
+    const params = new URLSearchParams(window.location.search);
+    // type 파라미터를 filter로 변환 (목록 페이지에서 filter를 사용)
+    if (type === "income") {
+      params.set("filter", "income");
+    } else if (type === "expense") {
+      params.set("filter", "expense");
+    }
+    // type 파라미터 제거 (목록 페이지에서는 filter를 사용)
+    params.delete("type");
+    const queryString = params.toString();
+    router.push(`/book${queryString ? `?${queryString}` : ""}`);
+  }, [router, type]);
 
   if (isLoading) {
     return (
@@ -1008,4 +1055,3 @@ export default function EditExpensePage() {
     </AppLayout>
   );
 }
-

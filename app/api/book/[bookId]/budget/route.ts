@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { budgets, books, categories, expenses } from '@/lib/db/schema'
 import { eq, and, gte, lte, sql } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
+import { parseDateStringToDate, isValidDateString, getMonthRange, getYearRange } from '@/lib/utils/date'
 
 /**
  * 예산 목록 조회 API
@@ -73,21 +74,19 @@ export async function GET(
           // 월간 필터링: 해당 월의 1일 ~ 마지막일
           const month = parseInt(monthParam, 10)
           if (!isNaN(month) && month >= 1 && month <= 12) {
-            const startOfMonth = new Date(year, month - 1, 1)
-            const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999)
+            const { start: startOfMonth, end: endOfMonth } = getMonthRange(year, month)
             
             // 예산의 startDate <= 월의 마지막일 AND 예산의 endDate >= 월의 1일
-            whereConditions.push(lte(budgets.startDate, endOfMonth))
-            whereConditions.push(gte(budgets.endDate, startOfMonth))
+            whereConditions.push(lte(budgets.startDate, endOfMonth.toJSDate()))
+            whereConditions.push(gte(budgets.endDate, startOfMonth.toJSDate()))
           }
         } else {
           // 연간 필터링: 해당 년의 1월 1일 ~ 12월 31일
-          const startOfYear = new Date(year, 0, 1)
-          const endOfYear = new Date(year, 11, 31, 23, 59, 59, 999)
+          const { start: startOfYear, end: endOfYear } = getYearRange(year)
           
           // 예산의 startDate <= 년의 마지막일 AND 예산의 endDate >= 년의 1일
-          whereConditions.push(lte(budgets.startDate, endOfYear))
-          whereConditions.push(gte(budgets.endDate, startOfYear))
+          whereConditions.push(lte(budgets.startDate, endOfYear.toJSDate()))
+          whereConditions.push(gte(budgets.endDate, startOfYear.toJSDate()))
         }
       }
     }
@@ -226,12 +225,35 @@ export async function POST(
       )
     }
 
-    const start = new Date(startDate)
-    const end = new Date(endDate)
+    let start: Date
+    let end: Date
 
-    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    try {
+      if (typeof startDate !== 'string' || !isValidDateString(startDate)) {
+        return NextResponse.json(
+          { error: '시작일은 YYYY-MM-DD 형식이어야 합니다.' },
+          { status: 400 }
+        )
+      }
+      start = parseDateStringToDate(startDate)
+    } catch (error) {
       return NextResponse.json(
-        { error: '잘못된 날짜 형식입니다.' },
+        { error: error instanceof Error ? error.message : '잘못된 시작일 형식입니다.' },
+        { status: 400 }
+      )
+    }
+
+    try {
+      if (typeof endDate !== 'string' || !isValidDateString(endDate)) {
+        return NextResponse.json(
+          { error: '종료일은 YYYY-MM-DD 형식이어야 합니다.' },
+          { status: 400 }
+        )
+      }
+      end = parseDateStringToDate(endDate)
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : '잘못된 종료일 형식입니다.' },
         { status: 400 }
       )
     }

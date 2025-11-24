@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { budgets, books, categories, expenses } from '@/lib/db/schema'
 import { eq, and, lte, gte, ne } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
+import { parseDateStringToDate, isValidDateString } from '@/lib/utils/date'
 
 /**
  * 예산 수정 API
@@ -109,25 +110,39 @@ export async function PUT(
     let newEndDate = existingBudget.endDate
 
     if (startDate) {
-      newStartDate = new Date(startDate)
-      if (isNaN(newStartDate.getTime())) {
+      try {
+        if (typeof startDate !== 'string' || !isValidDateString(startDate)) {
+          return NextResponse.json(
+            { error: '시작일은 YYYY-MM-DD 형식이어야 합니다.' },
+            { status: 400 }
+          )
+        }
+        newStartDate = parseDateStringToDate(startDate)
+        updateData.startDate = newStartDate
+      } catch (error) {
         return NextResponse.json(
-          { error: '잘못된 시작일 형식입니다.' },
+          { error: error instanceof Error ? error.message : '잘못된 시작일 형식입니다.' },
           { status: 400 }
         )
       }
-      updateData.startDate = newStartDate
     }
 
     if (endDate) {
-      newEndDate = new Date(endDate)
-      if (isNaN(newEndDate.getTime())) {
+      try {
+        if (typeof endDate !== 'string' || !isValidDateString(endDate)) {
+          return NextResponse.json(
+            { error: '종료일은 YYYY-MM-DD 형식이어야 합니다.' },
+            { status: 400 }
+          )
+        }
+        newEndDate = parseDateStringToDate(endDate)
+        updateData.endDate = newEndDate
+      } catch (error) {
         return NextResponse.json(
-          { error: '잘못된 종료일 형식입니다.' },
+          { error: error instanceof Error ? error.message : '잘못된 종료일 형식입니다.' },
           { status: 400 }
         )
       }
-      updateData.endDate = newEndDate
     }
 
     if (newStartDate > newEndDate) {

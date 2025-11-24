@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { budgets, books, categories, expenses } from '@/lib/db/schema'
 import { eq, and, gte, lte, sql, desc } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
+import { getToday, getMonthsAgo, getYearsAgo } from '@/lib/utils/date'
 
 /**
  * 고정지출 판별 함수
@@ -97,16 +98,15 @@ export async function GET(
     }
 
     // 분석 기간 설정
-    const now = new Date()
+    const endDate = getToday().toJSDate()
     let startDate: Date
-    let endDate: Date = now
 
     if (periodParam === 'monthly') {
       // 최근 3개월 데이터 분석
-      startDate = new Date(now.getFullYear(), now.getMonth() - 3, 1)
+      startDate = getMonthsAgo(3).startOf('month').toJSDate()
     } else {
       // 최근 3년 데이터 분석
-      startDate = new Date(now.getFullYear() - 3, 0, 1)
+      startDate = getYearsAgo(3).startOf('year').toJSDate()
     }
 
     // 카테고리별 지출 데이터 조회
