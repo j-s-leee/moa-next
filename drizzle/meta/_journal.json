@@ -22,6 +22,13 @@
       "when": 1763808210802,
       "tag": "0002_unusual_warbound",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1763897677654,
+      "tag": "0003_tricky_pixie",
+      "breakpoints": true
     }
   ]
 }

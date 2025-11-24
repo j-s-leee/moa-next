@@ -2,6 +2,7 @@ import {
   pgTable,
   text,
   timestamp,
+  date,
   boolean,
   integer,
   pgEnum,
@@ -169,7 +170,7 @@ export const categories = pgTable(
     type: categoryTypeEnum("type").notNull(), // 'expense' | 'income'
     expenseType: expenseTypeEnum("expense_type"), // 지출 타입 (지출 카테고리인 경우)
     autoDetectedType: expenseTypeEnum("auto_detected_type"), // 자동 감지된 타입
-    lastTypeCheckDate: timestamp("last_type_check_date"), // 마지막 타입 확인 날짜
+    lastTypeCheckDate: date("last_type_check_date"), // 마지막 타입 확인 날짜
     order: integer("order").default(0), // 정렬 순서
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -201,8 +202,8 @@ export const budgets = pgTable(
       .references(() => categories.id, { onDelete: "cascade" }),
     period: budgetPeriodEnum("period").notNull(), // 'monthly' | 'yearly'
     amount: integer("amount").notNull(), // 예산 금액 (원 단위)
-    startDate: timestamp("start_date").notNull(),
-    endDate: timestamp("end_date").notNull(),
+    startDate: date("start_date").notNull(),
+    endDate: date("end_date").notNull(),
     previousBudgetId: uuid("previous_budget_id"), // 예산 수정 이력 (self-reference는 relations에서 처리)
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -244,7 +245,7 @@ export const expenses = pgTable(
       .notNull()
       .references(() => categories.id, { onDelete: "cascade" }),
     amount: integer("amount").notNull(), // 지출 금액 (원 단위)
-    date: timestamp("date").notNull(), // 지출 날짜
+    date: date("date").notNull(), // 지출 날짜
     description: text("description"), // 메모/설명
     userId: uuid("user_id")
       .notNull()
@@ -288,7 +289,7 @@ export const incomes = pgTable(
     // 단일 거래 vs 반복 수입 구분
     // 단일 거래: date만 사용, period와 startDate/endDate는 null
     // 반복 수입: period와 startDate/endDate 사용, date는 null
-    date: timestamp("date"), // 단일 거래 날짜 (프리랜서, 자영업자용)
+    date: date("date"), // 단일 거래 날짜 (프리랜서, 자영업자용)
     period: incomePeriodEnum("period"), // 'monthly' | 'yearly' (반복 수입용, nullable)
     source: text("source"), // 수입 출처 (선택사항, 카테고리 이름으로 대체 가능)
     incomeType: incomeTypeEnum("income_type").notNull().default("actual"), // 'actual' | 'transfer'
@@ -296,8 +297,8 @@ export const incomes = pgTable(
       () => books.id,
       { onDelete: "set null" }
     ), // 이체인 경우 출처 가계부 ID
-    startDate: timestamp("start_date"), // 반복 수입 시작 날짜 (nullable)
-    endDate: timestamp("end_date"), // 반복 수입 종료 날짜 (null이면 무기한)
+    startDate: date("start_date"), // 반복 수입 시작 날짜 (nullable)
+    endDate: date("end_date"), // 반복 수입 종료 날짜 (null이면 무기한)
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
