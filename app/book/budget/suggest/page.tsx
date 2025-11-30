@@ -23,32 +23,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import * as LucideIcons from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useBooks, useBudgetSuggestions, useCreateBudget, useUpdateBudget, useUpdateCategory, useBudgets } from "@/lib/react-query/queries";
+import { useBookStore } from "@/lib/stores/book-store";
+import { DateTime } from "luxon";
 
-interface BudgetSuggestion {
-  categoryId: string;
-  category: {
-    id: string;
-    name: string;
-    icon: string | null;
-    type: "expense" | "income";
-  } | null;
-  suggestedAmount: number;
-  confidence: "low" | "medium" | "high";
-  reason: string;
-  isFixedExpense?: boolean;
-  stats: {
-    totalAmount: number;
-    count: number;
-    avgAmount: number;
-    maxAmount: number;
-    minAmount: number;
-    variance?: number;
-    varianceRatio?: number;
-  };
-  existingAmount: number | null;
-  difference: number | null;
-  differencePercent: number | null;
-}
+import type { BudgetSuggestion } from "@/lib/react-query/queries/budgets";
 
 export default function BudgetSuggestPage() {
   const router = useRouter();
@@ -57,159 +36,167 @@ export default function BudgetSuggestPage() {
     | "monthly"
     | "yearly";
 
-  const [bookId, setBookId] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<BudgetSuggestion[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { currentBookId, setCurrentBookId } = useBookStore();
   const [acceptingIds, setAcceptingIds] = useState<Set<string>>(new Set());
 
+  // 가계부 목록 조회
+  const { data: booksData } = useBooks();
+  
+  // 가계부가 로드되면 첫 번째 개인 가계부를 선택
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        // 개인 가계부 목록 조회
-        const booksResponse = await fetch("/api/book");
-        if (!booksResponse.ok) {
-          throw new Error("가계부 목록 조회에 실패했습니다.");
-        }
-        const booksData = await booksResponse.json();
-        const personalBook = booksData.books?.[0];
-
-        if (!personalBook) {
-          toast.error("가계부를 찾을 수 없습니다.");
-          router.push("/book/budget");
-          return;
-        }
-
-        setBookId(personalBook.id);
-
-        // 예산 제안 조회
-        const suggestResponse = await fetch(
-          `/api/book/${personalBook.id}/budget/suggest?period=${period}`
-        );
-        if (!suggestResponse.ok) {
-          throw new Error("예산 제안 조회에 실패했습니다.");
-        }
-        const suggestData = await suggestResponse.json();
-        setSuggestions(suggestData.suggestions || []);
-      } catch (error) {
-        console.error("데이터 로드 오류:", error);
-        toast.error(
-          error instanceof Error ? error.message : "데이터 로드에 실패했습니다."
-        );
-      } finally {
-        setIsLoading(false);
+    if (booksData?.books && !currentBookId) {
+      const personalBook = booksData.books.find((book) => book.type === "personal");
+      if (personalBook) {
+        setCurrentBookId(personalBook.id);
+      } else if (booksData.books.length > 0) {
+        setCurrentBookId(booksData.books[0].id);
+      } else {
+        toast.error("가계부를 찾을 수 없습니다.");
+        router.push("/book/budget");
       }
-    };
+    }
+  }, [booksData, currentBookId, setCurrentBookId, router]);
 
-    loadData();
-  }, [router, period]);
+  // 예산 제안 조회
+  const { data: suggestionsData, isLoading } = useBudgetSuggestions(currentBookId, period);
+  const suggestions = suggestionsData?.suggestions || [];
+  
+  // 현재 년/월 계산
+  const now = DateTime.now();
+  const year = now.year;
+  const month = period === "monthly" ? now.month : undefined;
+
+  // 예산 목록 조회 (기존 예산 찾기용)
+  const { data: budgetsData } = useBudgets(currentBookId, period, year, month);
+  const budgets = budgetsData?.budgets || [];
+
+  const createBudget = useCreateBudget();
+  const updateBudget = useUpdateBudget();
+  const updateCategory = useUpdateCategory();
 
   const handleAccept = async (suggestion: BudgetSuggestion) => {
-    if (!bookId) return;
+    if (!currentBookId) return;
 
     setAcceptingIds((prev) => new Set(prev).add(suggestion.categoryId!));
 
     try {
+      // 날짜 계산
+      const now = new Date();
+      let startDate: Date;
+      let endDate: Date;
+
+      if (period === "monthly") {
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = new Date("2099-12-31T23:59:59.999Z");
+      } else {
+        startDate = new Date(now.getFullYear(), 0, 1);
+        endDate = new Date("2099-12-31T23:59:59.999Z");
+      }
+
       // 기존 예산이 있으면 수정, 없으면 생성
       if (suggestion.existingAmount !== null) {
-        // 기존 예산 ID 찾기
-        const budgetsResponse = await fetch(
-          `/api/book/${bookId}/budget?period=${period}`
-        );
-        if (!budgetsResponse.ok) throw new Error("예산 조회 실패");
-        const budgetsData = await budgetsResponse.json();
-        const existingBudget = budgetsData.budgets?.find(
-          (b: any) => b.categoryId === suggestion.categoryId
+        const existingBudget = budgets.find(
+          (b) => b.categoryId === suggestion.categoryId
         );
 
         if (existingBudget) {
           // 예산 수정
-          const now = new Date();
-          let startDate: Date;
-          let endDate: Date;
-
-          if (period === "monthly") {
-            startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-            endDate = new Date("2099-12-31T23:59:59.999Z");
-          } else {
-            startDate = new Date(now.getFullYear(), 0, 1);
-            endDate = new Date("2099-12-31T23:59:59.999Z");
-          }
-
-          const response = await fetch(
-            `/api/book/${bookId}/budget/${existingBudget.id}`,
+          updateBudget.mutate(
             {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
+              bookId: currentBookId,
+              budgetId: existingBudget.id,
+              data: {
                 amount: suggestion.suggestedAmount,
                 startDate: startDate.toISOString(),
                 endDate: endDate.toISOString(),
-              }),
+              },
+            },
+            {
+              onSuccess: () => {
+                // 고정지출로 판별된 경우 카테고리의 expenseType을 "fixed"로 업데이트
+                if (suggestion.isFixedExpense) {
+                  updateCategory.mutate(
+                    {
+                      bookId: currentBookId,
+                      categoryId: suggestion.categoryId,
+                      data: {
+                        expenseType: "fixed",
+                      } as any, // 타입 확장 필요
+                    },
+                    {
+                      onError: (error) => {
+                        console.warn("카테고리 타입 업데이트 오류 (무시됨):", error);
+                      },
+                    }
+                  );
+                }
+                setAcceptingIds((prev) => {
+                  const next = new Set(prev);
+                  next.delete(suggestion.categoryId!);
+                  return next;
+                });
+              },
+              onError: () => {
+                setAcceptingIds((prev) => {
+                  const next = new Set(prev);
+                  next.delete(suggestion.categoryId!);
+                  return next;
+                });
+              },
             }
           );
-
-          if (!response.ok) throw new Error("예산 수정 실패");
         }
       } else {
         // 예산 생성
-        const now = new Date();
-        let startDate: Date;
-        let endDate: Date;
-
-        if (period === "monthly") {
-          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-          endDate = new Date("2099-12-31T23:59:59.999Z");
-        } else {
-          startDate = new Date(now.getFullYear(), 0, 1);
-          endDate = new Date("2099-12-31T23:59:59.999Z");
-        }
-
-        const response = await fetch(`/api/book/${bookId}/budget`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            categoryId: suggestion.categoryId,
-            period,
-            amount: suggestion.suggestedAmount,
-            startDate: startDate.toISOString(),
-            endDate: endDate.toISOString(),
-          }),
-        });
-
-        if (!response.ok) throw new Error("예산 생성 실패");
-      }
-
-      // 고정지출로 판별된 경우 카테고리의 expenseType을 "fixed"로 업데이트
-      if (suggestion.isFixedExpense) {
-        try {
-          const categoryUpdateResponse = await fetch(
-            `/api/book/${bookId}/category/${suggestion.categoryId}`,
-            {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                expenseType: "fixed",
-              }),
-            }
-          );
-          if (!categoryUpdateResponse.ok) {
-            console.warn("카테고리 타입 업데이트 실패 (무시됨)");
+        createBudget.mutate(
+          {
+            bookId: currentBookId,
+            data: {
+              categoryId: suggestion.categoryId,
+              period,
+              amount: suggestion.suggestedAmount,
+              startDate: startDate.toISOString(),
+              endDate: endDate.toISOString(),
+            },
+          },
+          {
+            onSuccess: () => {
+              // 고정지출로 판별된 경우 카테고리의 expenseType을 "fixed"로 업데이트
+              if (suggestion.isFixedExpense) {
+                updateCategory.mutate(
+                  {
+                    bookId: currentBookId,
+                    categoryId: suggestion.categoryId,
+                    data: {
+                      expenseType: "fixed",
+                    },
+                  },
+                  {
+                    onError: (error) => {
+                      console.warn("카테고리 타입 업데이트 오류 (무시됨):", error);
+                    },
+                  }
+                );
+              }
+              setAcceptingIds((prev) => {
+                const next = new Set(prev);
+                next.delete(suggestion.categoryId!);
+                return next;
+              });
+            },
+            onError: () => {
+              setAcceptingIds((prev) => {
+                const next = new Set(prev);
+                next.delete(suggestion.categoryId!);
+                return next;
+              });
+            },
           }
-        } catch (error) {
-          console.warn("카테고리 타입 업데이트 오류 (무시됨):", error);
-        }
+        );
       }
-
-      toast.success(`${suggestion.category?.name} 예산이 적용되었습니다.`);
-
-      // 제안 목록에서 제거
-      setSuggestions((prev) =>
-        prev.filter((s) => s.categoryId !== suggestion.categoryId)
-      );
     } catch (error) {
       console.error("예산 적용 오류:", error);
       toast.error("예산 적용에 실패했습니다.");
-    } finally {
       setAcceptingIds((prev) => {
         const next = new Set(prev);
         next.delete(suggestion.categoryId!);
@@ -219,9 +206,6 @@ export default function BudgetSuggestPage() {
   };
 
   const handleReject = (suggestion: BudgetSuggestion) => {
-    setSuggestions((prev) =>
-      prev.filter((s) => s.categoryId !== suggestion.categoryId)
-    );
     toast.info(`${suggestion.category?.name} 제안을 거부했습니다.`);
   };
 

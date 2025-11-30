@@ -45,6 +45,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { useCategories, useDeleteCategory, useReorderCategories } from "@/lib/react-query/queries";
 
 // 카테고리 타입 정의
 interface Category {
@@ -251,128 +252,35 @@ export default function CategoryPage() {
   const bookId = params.bookId as string;
 
   const [activeTab, setActiveTab] = useState<"expense" | "income">("expense");
-  const [expenseCategories, setExpenseCategories] = useState<Category[]>([]);
-  const [incomeCategories, setIncomeCategories] = useState<Category[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isReordering, setIsReordering] = useState(false);
 
   // 카테고리 목록 조회
-  useEffect(() => {
-    if (!bookId) return;
+  const { data: categoriesData, isLoading } = useCategories(bookId);
+  const deleteCategory = useDeleteCategory();
+  const reorderCategories = useReorderCategories();
 
-    async function fetchCategories() {
-      setIsLoading(true);
-      try {
-        // 지출 카테고리 조회
-        const expenseResponse = await fetch(
-          `/api/book/${bookId}/category?type=expense`
-        );
-        if (expenseResponse.ok) {
-          const expenseData = await expenseResponse.json();
-          setExpenseCategories(expenseData.categories || []);
-        }
-
-        // 수입 카테고리 조회
-        const incomeResponse = await fetch(
-          `/api/book/${bookId}/category?type=income`
-        );
-        if (incomeResponse.ok) {
-          const incomeData = await incomeResponse.json();
-          setIncomeCategories(incomeData.categories || []);
-        }
-      } catch (error) {
-        console.error("카테고리 조회 오류:", error);
-        toast.error("카테고리를 불러오는 중 오류가 발생했습니다.");
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    fetchCategories();
-  }, [bookId]);
+  const expenseCategories = (categoriesData?.categories || []).filter(
+    (cat) => cat.type === "expense"
+  ) as Category[];
+  const incomeCategories = (categoriesData?.categories || []).filter(
+    (cat) => cat.type === "income"
+  ) as Category[];
 
   const handleEdit = (category: Category) => {
     // TODO: 카테고리 수정 모달/다이얼로그 구현
     router.push(`/book/${bookId}/category/edit/${category.id}`);
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = (id: string) => {
     if (!bookId) return;
 
-    try {
-      const response = await fetch(`/api/book/${bookId}/category/${id}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "삭제 실패");
-      }
-
-      toast.success("카테고리가 삭제되었습니다.");
-
-      // 목록에서 제거
-      setExpenseCategories((prev) => prev.filter((c) => c.id !== id));
-      setIncomeCategories((prev) => prev.filter((c) => c.id !== id));
-    } catch (error) {
-      console.error("카테고리 삭제 오류:", error);
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "카테고리 삭제 중 오류가 발생했습니다."
-      );
-    }
+    deleteCategory.mutate({ bookId, categoryId: id });
   };
 
-  const handleReorder = async (newOrder: Category[]) => {
-    if (!bookId || isReordering) return;
+  const handleReorder = (newOrder: Category[]) => {
+    if (!bookId) return;
 
-    setIsReordering(true);
-    try {
-      const categoryIds = newOrder.map((c) => c.id);
-      const response = await fetch(`/api/book/${bookId}/category/reorder`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ categoryIds }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "순서 변경 실패");
-      }
-
-      // 현재 탭에 따라 상태 업데이트
-      if (activeTab === "expense") {
-        setExpenseCategories(newOrder);
-      } else {
-        setIncomeCategories(newOrder);
-      }
-    } catch (error) {
-      console.error("카테고리 순서 변경 오류:", error);
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "카테고리 순서 변경 중 오류가 발생했습니다."
-      );
-      // 오류 발생 시 목록 다시 조회
-      if (bookId) {
-        const response = await fetch(
-          `/api/book/${bookId}/category?type=${activeTab}`
-        );
-        if (response.ok) {
-          const data = await response.json();
-          if (activeTab === "expense") {
-            setExpenseCategories(data.categories || []);
-          } else {
-            setIncomeCategories(data.categories || []);
-          }
-        }
-      }
-    } finally {
-      setIsReordering(false);
-    }
+    const categoryIds = newOrder.map((c) => c.id);
+    reorderCategories.mutate({ bookId, categoryIds });
   };
 
   const handleAdd = () => {

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { AppLayout } from "@/components/app-layout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
@@ -14,6 +16,14 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from "@/components/ui/drawer";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import {
   ArrowLeft,
   Check,
@@ -33,6 +43,9 @@ import {
 } from "@/components/ui/popover";
 import { toast } from "sonner";
 import { DateTime } from "luxon";
+import { expenseSchema, incomeSchema, type ExpenseFormData, type IncomeFormData } from "@/lib/validations";
+import { useBooks, useCategories, useCreateExpense, useCreateIncome } from "@/lib/react-query/queries";
+import { useBookStore } from "@/lib/stores/book-store";
 
 // 카테고리 타입 정의
 interface Category {
@@ -172,169 +185,182 @@ function ExpenseForm({
   onSave: () => void;
   initialDate?: DateTime | null;
 }) {
-  const [memo, setMemo] = useState("");
-  const [amount, setAmount] = useState("");
-  const [date, setDate] = useState<DateTime | null>(
-    initialDate || DateTime.now()
-  );
-  const [categoryId, setCategoryId] = useState<string | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
 
-  const selectedCategory = categories.find((cat) => cat.id === categoryId);
+  const form = useForm<ExpenseFormData>({
+    resolver: zodResolver(expenseSchema),
+    defaultValues: {
+      categoryId: "",
+      amount: "",
+      date: initialDate ? initialDate.toJSDate() : new Date(),
+      memo: "",
+    },
+  });
+
+  const selectedCategoryId = form.watch("categoryId");
+  const selectedCategory = categories.find((cat) => cat.id === selectedCategoryId);
   const IconComponent = selectedCategory
     ? ((LucideIcons as any)[selectedCategory.icon || ""] as LucideIcon) || null
     : null;
 
-  const handleSave = async () => {
+  const createExpense = useCreateExpense();
+
+  const onSubmit = async (data: ExpenseFormData) => {
     if (!bookId) {
       toast.error("가계부를 찾을 수 없습니다.");
       return;
     }
 
-    if (!categoryId) {
-      toast.error("카테고리를 선택해주세요.");
-      return;
-    }
-
-    if (!amount || Number(amount) <= 0) {
-      toast.error("금액을 입력해주세요.");
-      return;
-    }
-
-    if (!date) {
-      toast.error("날짜를 선택해주세요.");
-      return;
-    }
-
-    setIsSaving(true);
-
-    try {
-      const response = await fetch(`/api/book/${bookId}/expense`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+    createExpense.mutate(
+      {
+        bookId,
+        data: {
+          categoryId: data.categoryId,
+          amount: Number(data.amount),
+          date: DateTime.fromJSDate(data.date).toFormat("yyyy-MM-dd"),
+          memo: data.memo?.trim() || null,
         },
-        body: JSON.stringify({
-          categoryId,
-          amount: Number(amount),
-          date: date ? date.toFormat("yyyy-MM-dd") : null,
-          description: memo.trim() || null,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "지출 추가에 실패했습니다.");
+      },
+      {
+        onSuccess: () => {
+          form.reset();
+          onSave();
+        },
       }
-
-      toast.success("지출이 추가되었습니다.");
-      onSave();
-    } catch (error) {
-      console.error("지출 추가 오류:", error);
-      toast.error(
-        error instanceof Error ? error.message : "지출 추가에 실패했습니다."
-      );
-    } finally {
-      setIsSaving(false);
-    }
+    );
   };
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div className="space-y-2">
-        <Label htmlFor="category">카테고리</Label>
-        <CategoryDrawer
-          type="expense"
-          selectedCategoryId={categoryId}
-          onSelectCategory={setCategoryId}
-          categories={categories}
-          bookId={bookId}
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 max-w-2xl">
+        <FormField
+          control={form.control}
+          name="categoryId"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>카테고리</FormLabel>
+              <FormControl>
+                <CategoryDrawer
+                  type="expense"
+                  selectedCategoryId={field.value || null}
+                  onSelectCategory={field.onChange}
+                  categories={categories}
+                  bookId={bookId}
+                >
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start text-left font-normal"
+                  >
+                    {selectedCategory && IconComponent ? (
+                      <>
+                        <IconComponent className="mr-2 h-4 w-4" />
+                        {selectedCategory.name}
+                      </>
+                    ) : selectedCategory ? (
+                      <>
+                        <span className="mr-2">{selectedCategory.icon || "📦"}</span>
+                        {selectedCategory.name}
+                      </>
+                    ) : (
+                      "카테고리 선택"
+                    )}
+                  </Button>
+                </CategoryDrawer>
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="amount"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>금액</FormLabel>
+              <FormControl>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="금액을 입력하세요"
+                  {...field}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="date"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>날짜</FormLabel>
+              <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+                <PopoverTrigger asChild>
+                  <FormControl>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full justify-between font-normal"
+                    >
+                      {field.value ? DateTime.fromJSDate(field.value).toLocaleString() : "날짜 선택"}
+                      <ChevronDownIcon />
+                    </Button>
+                  </FormControl>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto overflow-hidden p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={field.value}
+                    captionLayout="dropdown"
+                    onSelect={(selectedDate) => {
+                      if (selectedDate) {
+                        field.onChange(selectedDate);
+                        setCalendarOpen(false);
+                      }
+                    }}
+                  />
+                </PopoverContent>
+              </Popover>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="memo"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>메모</FormLabel>
+              <FormControl>
+                <Input placeholder="메모를 입력하세요" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <Button
+          type="submit"
+          disabled={createExpense.isPending}
+          className="w-full"
         >
-          <Button
-            variant="outline"
-            className="w-full justify-start text-left font-normal"
-          >
-            {selectedCategory && IconComponent ? (
-              <>
-                <IconComponent className="mr-2 h-4 w-4" />
-                {selectedCategory.name}
-              </>
-            ) : selectedCategory ? (
-              <>
-                <span className="mr-2">{selectedCategory.icon || "📦"}</span>
-                {selectedCategory.name}
-              </>
-            ) : (
-              "카테고리 선택"
-            )}
-          </Button>
-        </CategoryDrawer>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="amount">금액</Label>
-        <Input
-          id="amount"
-          type="number"
-          inputMode="numeric"
-          pattern="[0-9]*"
-          placeholder="금액을 입력하세요"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-        />
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="date">날짜</Label>
-        <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              variant="outline"
-              id="date"
-              className="w-full justify-between font-normal"
-            >
-              {date ? date.toLocaleString() : "날짜 선택"}
-              <ChevronDownIcon />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto overflow-hidden p-0" align="start">
-            <Calendar
-              mode="single"
-              selected={date ? date.toJSDate() : undefined}
-              captionLayout="dropdown"
-              onSelect={(selectedDate) => {
-                if (selectedDate) {
-                  setDate(DateTime.fromJSDate(selectedDate));
-                }
-                setCalendarOpen(false);
-              }}
-            />
-          </PopoverContent>
-        </Popover>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="memo">메모</Label>
-        <Input
-          id="memo"
-          placeholder="메모를 입력하세요"
-          value={memo}
-          onChange={(e) => setMemo(e.target.value)}
-        />
-      </div>
-
-      <Button onClick={handleSave} disabled={isSaving} className="w-full">
-        {isSaving ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            저장 중...
-          </>
-        ) : (
-          "저장"
-        )}
-      </Button>
-    </div>
+          {createExpense.isPending ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              저장 중...
+            </>
+          ) : (
+            "저장"
+          )}
+        </Button>
+      </form>
+    </Form>
   );
 }
 
@@ -349,355 +375,412 @@ function IncomeForm({
   onSave: () => void;
   initialDate?: DateTime | null;
 }) {
-  const [categoryId, setCategoryId] = useState<string | null>(null);
-  const [amount, setAmount] = useState("");
-  const [incomeType, setIncomeType] = useState<"single" | "recurring">(
-    "single"
-  ); // 단일 거래 vs 반복 수입
-  const [date, setDate] = useState<DateTime | null>(
-    initialDate || DateTime.now()
-  ); // 단일 거래용 날짜
-  const [period, setPeriod] = useState<"monthly" | "yearly">("monthly"); // 반복 수입용
-  const [startDate, setStartDate] = useState<DateTime | null>(
-    initialDate || DateTime.now()
-  ); // 반복 수입용 시작일
-  const [endDate, setEndDate] = useState<DateTime | null>(null); // 반복 수입용 종료일
-  const [source, setSource] = useState(""); // 수입 출처 (선택사항)
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [startDateCalendarOpen, setStartDateCalendarOpen] = useState(false);
   const [endDateCalendarOpen, setEndDateCalendarOpen] = useState(false);
-  const [hasEndDate, setHasEndDate] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
 
-  const selectedCategory = categories.find((cat) => cat.id === categoryId);
+  const form = useForm<IncomeFormData>({
+    resolver: zodResolver(incomeSchema),
+    defaultValues: {
+      incomeType: "single",
+      categoryId: "",
+      amount: "",
+      date: initialDate ? initialDate.toJSDate() : undefined,
+      period: "monthly",
+      startDate: initialDate ? initialDate.toJSDate() : undefined,
+      endDate: null,
+      source: "",
+    },
+  });
+
+  const incomeType = form.watch("incomeType");
+  const selectedCategoryId = form.watch("categoryId");
+  const selectedCategory = categories.find((cat) => cat.id === selectedCategoryId);
   const IconComponent = selectedCategory
     ? ((LucideIcons as any)[selectedCategory.icon || ""] as LucideIcon) || null
     : null;
+  const hasEndDate = form.watch("endDate") !== null && form.watch("endDate") !== undefined;
 
-  const handleSave = async () => {
+  const createIncome = useCreateIncome();
+
+  const onSubmit = async (data: IncomeFormData) => {
     if (!bookId) {
       toast.error("가계부를 찾을 수 없습니다.");
       return;
     }
 
-    if (!categoryId) {
-      toast.error("카테고리를 선택해주세요.");
-      return;
-    }
+    let requestBody: any = {
+      categoryId: data.categoryId,
+      amount: Number(data.amount),
+      incomeType: "actual", // 기본값: 실제 수입
+      source: data.source?.trim() || null,
+    };
 
-    if (!amount || Number(amount) <= 0) {
-      toast.error("금액을 입력해주세요.");
-      return;
-    }
-
-    // 단일 거래인 경우 date 필수
-    if (incomeType === "single" && !date) {
-      toast.error("날짜를 선택해주세요.");
-      return;
-    }
-
-    // 반복 수입인 경우 startDate 필수
-    if (incomeType === "recurring" && !startDate) {
-      toast.error("시작 날짜를 선택해주세요.");
-      return;
-    }
-
-    setIsSaving(true);
-
-    try {
-      const requestBody: any = {
-        categoryId,
-        amount: Number(amount),
-        incomeType: "actual", // 기본값: 실제 수입
-        source: source.trim() || null,
-      };
-
-      if (incomeType === "single") {
-        // 단일 거래: date만 사용, period와 startDate/endDate는 null
-        requestBody.date = date ? date.toFormat("yyyy-MM-dd") : null;
-        requestBody.period = null;
-        requestBody.startDate = null;
-        requestBody.endDate = null;
-      } else {
-        // 반복 수입: period와 startDate/endDate 사용, date는 null
-        requestBody.date = null;
-        requestBody.period = period;
-        requestBody.startDate = startDate
-          ? startDate.toFormat("yyyy-MM-dd")
-          : null;
-        requestBody.endDate =
-          hasEndDate && endDate ? endDate.toFormat("yyyy-MM-dd") : null;
+    if (data.incomeType === "single") {
+      // 단일 거래: date만 사용, period와 startDate/endDate는 null
+      if (!data.date) {
+        toast.error("날짜를 선택해주세요");
+        return;
       }
+      requestBody.date = DateTime.fromJSDate(data.date).toFormat("yyyy-MM-dd");
+      requestBody.period = null;
+      requestBody.startDate = null;
+      requestBody.endDate = null;
+    } else {
+      // 반복 수입: period와 startDate/endDate 사용, date는 null
+      if (!data.period || !data.startDate) {
+        toast.error("기간과 시작 날짜를 선택해주세요");
+        return;
+      }
+      requestBody.date = null;
+      requestBody.period = data.period;
+      requestBody.startDate = DateTime.fromJSDate(data.startDate).toFormat("yyyy-MM-dd");
+      requestBody.endDate = data.endDate
+        ? DateTime.fromJSDate(data.endDate).toFormat("yyyy-MM-dd")
+        : null;
+    }
 
-      const response = await fetch(`/api/book/${bookId}/income`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+    createIncome.mutate(
+      {
+        bookId,
+        data: requestBody,
+      },
+      {
+        onSuccess: () => {
+          form.reset();
+          onSave();
         },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "수입 추가에 실패했습니다.");
       }
-
-      toast.success("수입이 추가되었습니다.");
-      onSave();
-    } catch (error) {
-      console.error("수입 추가 오류:", error);
-      toast.error(
-        error instanceof Error ? error.message : "수입 추가에 실패했습니다."
-      );
-    } finally {
-      setIsSaving(false);
-    }
+    );
   };
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div className="space-y-2">
-        <Label htmlFor="category">카테고리</Label>
-        <CategoryDrawer
-          type="income"
-          selectedCategoryId={categoryId}
-          onSelectCategory={setCategoryId}
-          categories={categories}
-          bookId={bookId}
-        >
-          <Button
-            variant="outline"
-            className="w-full justify-start text-left font-normal"
-          >
-            {selectedCategory && IconComponent ? (
-              <>
-                <IconComponent className="mr-2 h-4 w-4" />
-                {selectedCategory.name}
-              </>
-            ) : selectedCategory ? (
-              <>
-                <span className="mr-2">{selectedCategory.icon || "📦"}</span>
-                {selectedCategory.name}
-              </>
-            ) : (
-              "카테고리 선택"
-            )}
-          </Button>
-        </CategoryDrawer>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="amount">금액</Label>
-        <Input
-          id="amount"
-          type="number"
-          inputMode="numeric"
-          pattern="[0-9]*"
-          placeholder="금액을 입력하세요"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-        />
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="incomeType">수입 타입</Label>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant={incomeType === "single" ? "default" : "outline"}
-            onClick={() => setIncomeType("single")}
-            className="flex-1"
-          >
-            단일 거래
-          </Button>
-          <Button
-            type="button"
-            variant={incomeType === "recurring" ? "default" : "outline"}
-            onClick={() => setIncomeType("recurring")}
-            className="flex-1"
-          >
-            반복 수입
-          </Button>
-        </div>
-      </div>
-
-      {incomeType === "single" ? (
-        // 단일 거래: 날짜만 입력
-        <div className="space-y-2">
-          <Label htmlFor="date">날짜</Label>
-          <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                id="date"
-                className="w-full justify-between font-normal"
-              >
-                {date ? date.toLocaleString() : "날짜 선택"}
-                <ChevronDownIcon />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent
-              className="w-auto overflow-hidden p-0"
-              align="start"
-            >
-              <Calendar
-                mode="single"
-                selected={date ? date.toJSDate() : undefined}
-                captionLayout="dropdown"
-                onSelect={(selectedDate) => {
-                  if (selectedDate) {
-                    setDate(DateTime.fromJSDate(selectedDate));
-                  }
-                  setCalendarOpen(false);
-                }}
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-      ) : (
-        // 반복 수입: 기간, 시작일, 종료일 입력
-        <>
-          <div className="space-y-2">
-            <Label htmlFor="period">기간</Label>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={period === "monthly" ? "default" : "outline"}
-                onClick={() => setPeriod("monthly")}
-                className="flex-1"
-              >
-                월간
-              </Button>
-              <Button
-                type="button"
-                variant={period === "yearly" ? "default" : "outline"}
-                onClick={() => setPeriod("yearly")}
-                className="flex-1"
-              >
-                연간
-              </Button>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="startDate">시작 날짜</Label>
-            <Popover
-              open={startDateCalendarOpen}
-              onOpenChange={setStartDateCalendarOpen}
-            >
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  id="startDate"
-                  className="w-full justify-between font-normal"
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 max-w-2xl">
+        <FormField
+          control={form.control}
+          name="categoryId"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>카테고리</FormLabel>
+              <FormControl>
+                <CategoryDrawer
+                  type="income"
+                  selectedCategoryId={field.value || null}
+                  onSelectCategory={field.onChange}
+                  categories={categories}
+                  bookId={bookId}
                 >
-                  {startDate ? startDate.toLocaleString() : "날짜 선택"}
-                  <ChevronDownIcon />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent
-                className="w-auto overflow-hidden p-0"
-                align="start"
-              >
-                <Calendar
-                  mode="single"
-                  selected={startDate ? startDate.toJSDate() : undefined}
-                  captionLayout="dropdown"
-                  onSelect={(selectedDate) => {
-                    if (selectedDate) {
-                      setStartDate(DateTime.fromJSDate(selectedDate));
-                    }
-                    setStartDateCalendarOpen(false);
-                  }}
-                />
-              </PopoverContent>
-            </Popover>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="hasEndDate"
-                checked={hasEndDate}
-                onChange={(e) => {
-                  setHasEndDate(e.target.checked);
-                  if (!e.target.checked) {
-                    setEndDate(null);
-                  }
-                }}
-                className="h-4 w-4 rounded border-gray-300"
-              />
-              <Label htmlFor="hasEndDate" className="cursor-pointer">
-                종료 날짜 설정 (선택사항)
-              </Label>
-            </div>
-            {hasEndDate && (
-              <Popover
-                open={endDateCalendarOpen}
-                onOpenChange={setEndDateCalendarOpen}
-              >
-                <PopoverTrigger asChild>
                   <Button
+                    type="button"
                     variant="outline"
-                    className="w-full justify-between font-normal"
+                    className="w-full justify-start text-left font-normal"
                   >
-                    {endDate ? endDate.toLocaleString() : "날짜 선택"}
-                    <ChevronDownIcon />
+                    {selectedCategory && IconComponent ? (
+                      <>
+                        <IconComponent className="mr-2 h-4 w-4" />
+                        {selectedCategory.name}
+                      </>
+                    ) : selectedCategory ? (
+                      <>
+                        <span className="mr-2">{selectedCategory.icon || "📦"}</span>
+                        {selectedCategory.name}
+                      </>
+                    ) : (
+                      "카테고리 선택"
+                    )}
                   </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  className="w-auto overflow-hidden p-0"
-                  align="start"
-                >
-                  <Calendar
-                    mode="single"
-                    selected={endDate ? endDate.toJSDate() : undefined}
-                    captionLayout="dropdown"
-                    onSelect={(selectedDate) => {
-                      if (selectedDate) {
-                        setEndDate(DateTime.fromJSDate(selectedDate));
-                      }
-                      setEndDateCalendarOpen(false);
-                    }}
-                  />
-                </PopoverContent>
-              </Popover>
-            )}
-          </div>
-        </>
-      )}
-
-      <div className="space-y-2">
-        <Label htmlFor="source">출처 (선택사항)</Label>
-        <Input
-          id="source"
-          placeholder="수입 출처를 입력하세요"
-          value={source}
-          onChange={(e) => setSource(e.target.value)}
+                </CategoryDrawer>
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
         />
-      </div>
 
-      <Button onClick={handleSave} disabled={isSaving} className="w-full">
-        {isSaving ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            저장 중...
-          </>
+        <FormField
+          control={form.control}
+          name="amount"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>금액</FormLabel>
+              <FormControl>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="금액을 입력하세요"
+                  {...field}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="incomeType"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>수입 타입</FormLabel>
+              <FormControl>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant={field.value === "single" ? "default" : "outline"}
+                    onClick={() => {
+                      field.onChange("single");
+                      // 단일 거래로 변경 시 date 초기화
+                      if (initialDate) {
+                        form.setValue("date", initialDate.toJSDate());
+                      }
+                    }}
+                    className="flex-1"
+                  >
+                    단일 거래
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={field.value === "recurring" ? "default" : "outline"}
+                    onClick={() => {
+                      field.onChange("recurring");
+                      // 반복 수입으로 변경 시 startDate 초기화
+                      if (initialDate) {
+                        form.setValue("startDate", initialDate.toJSDate());
+                      }
+                    }}
+                    className="flex-1"
+                  >
+                    반복 수입
+                  </Button>
+                </div>
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        {incomeType === "single" ? (
+          <FormField
+            control={form.control}
+            name="date"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>날짜</FormLabel>
+                <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+                  <PopoverTrigger asChild>
+                    <FormControl>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full justify-between font-normal"
+                      >
+                        {field.value ? DateTime.fromJSDate(field.value).toLocaleString() : "날짜 선택"}
+                        <ChevronDownIcon />
+                      </Button>
+                    </FormControl>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="w-auto overflow-hidden p-0"
+                    align="start"
+                  >
+                    <Calendar
+                      mode="single"
+                      selected={field.value}
+                      captionLayout="dropdown"
+                      onSelect={(selectedDate) => {
+                        if (selectedDate) {
+                          field.onChange(selectedDate);
+                          setCalendarOpen(false);
+                        }
+                      }}
+                    />
+                  </PopoverContent>
+                </Popover>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         ) : (
-          "저장"
+          <>
+            <FormField
+              control={form.control}
+              name="period"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>기간</FormLabel>
+                  <FormControl>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant={field.value === "monthly" ? "default" : "outline"}
+                        onClick={() => field.onChange("monthly")}
+                        className="flex-1"
+                      >
+                        월간
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={field.value === "yearly" ? "default" : "outline"}
+                        onClick={() => field.onChange("yearly")}
+                        className="flex-1"
+                      >
+                        연간
+                      </Button>
+                    </div>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="startDate"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>시작 날짜</FormLabel>
+                  <Popover
+                    open={startDateCalendarOpen}
+                    onOpenChange={setStartDateCalendarOpen}
+                  >
+                    <PopoverTrigger asChild>
+                      <FormControl>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full justify-between font-normal"
+                        >
+                          {field.value ? DateTime.fromJSDate(field.value).toLocaleString() : "날짜 선택"}
+                          <ChevronDownIcon />
+                        </Button>
+                      </FormControl>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      className="w-auto overflow-hidden p-0"
+                      align="start"
+                    >
+                      <Calendar
+                        mode="single"
+                        selected={field.value}
+                        captionLayout="dropdown"
+                        onSelect={(selectedDate) => {
+                          if (selectedDate) {
+                            field.onChange(selectedDate);
+                            setStartDateCalendarOpen(false);
+                          }
+                        }}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="endDate"
+              render={({ field }) => (
+                <FormItem>
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      type="checkbox"
+                      id="hasEndDate"
+                      checked={hasEndDate}
+                      onChange={(e) => {
+                        if (!e.target.checked) {
+                          field.onChange(null);
+                        } else if (initialDate) {
+                          field.onChange(initialDate.toJSDate());
+                        }
+                      }}
+                      className="h-4 w-4 rounded border-gray-300"
+                    />
+                    <Label htmlFor="hasEndDate" className="cursor-pointer">
+                      종료 날짜 설정 (선택사항)
+                    </Label>
+                  </div>
+                  {hasEndDate && (
+                    <Popover
+                      open={endDateCalendarOpen}
+                      onOpenChange={setEndDateCalendarOpen}
+                    >
+                      <PopoverTrigger asChild>
+                        <FormControl>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full justify-between font-normal"
+                          >
+                            {field.value ? DateTime.fromJSDate(field.value).toLocaleString() : "날짜 선택"}
+                            <ChevronDownIcon />
+                          </Button>
+                        </FormControl>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        className="w-auto overflow-hidden p-0"
+                        align="start"
+                      >
+                        <Calendar
+                          mode="single"
+                          selected={field.value || undefined}
+                          captionLayout="dropdown"
+                          onSelect={(selectedDate) => {
+                            if (selectedDate) {
+                              field.onChange(selectedDate);
+                              setEndDateCalendarOpen(false);
+                            }
+                          }}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  )}
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </>
         )}
-      </Button>
-    </div>
+
+        <FormField
+          control={form.control}
+          name="source"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>출처 (선택사항)</FormLabel>
+              <FormControl>
+                <Input placeholder="수입 출처를 입력하세요" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <Button
+          type="submit"
+          disabled={createIncome.isPending}
+          className="w-full"
+        >
+          {createIncome.isPending ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              저장 중...
+            </>
+          ) : (
+            "저장"
+          )}
+        </Button>
+      </form>
+    </Form>
   );
 }
 
 export default function AddExpensePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [bookId, setBookId] = useState<string | null>(null);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { currentBookId, setCurrentBookId } = useBookStore();
+  const bookId = currentBookId;
 
   // 쿼리 파라미터에서 날짜 가져오기
   const dateParam = searchParams.get("date");
@@ -708,49 +791,29 @@ export default function AddExpensePage() {
     ? DateTime.fromISO(`${monthParam}-01`)
     : null;
 
-  // 가계부 ID 및 카테고리 로드
+  // 가계부 목록 조회
+  const { data: booksData, isLoading: isLoadingBooks } = useBooks();
+  
+  // 가계부가 로드되면 첫 번째 개인 가계부를 선택
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        // 개인 가계부 목록 조회
-        const booksResponse = await fetch("/api/book");
-        if (!booksResponse.ok) {
-          throw new Error("가계부 목록 조회에 실패했습니다.");
-        }
-        const booksData = await booksResponse.json();
-        const personalBook = booksData.books?.[0]; // 첫 번째 개인 가계부 사용
-
-        if (!personalBook) {
-          toast.error("가계부를 찾을 수 없습니다.");
-          router.push("/book");
-          return;
-        }
-
-        setBookId(personalBook.id);
-
-        // 카테고리 목록 조회
-        const categoriesResponse = await fetch(
-          `/api/book/${personalBook.id}/category`
-        );
-        if (!categoriesResponse.ok) {
-          throw new Error("카테고리 목록 조회에 실패했습니다.");
-        }
-        const categoriesData = await categoriesResponse.json();
-        setCategories(categoriesData.categories || []);
-      } catch (error) {
-        console.error("데이터 로드 오류:", error);
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : "데이터를 불러오는데 실패했습니다."
-        );
-      } finally {
-        setIsLoading(false);
+    if (booksData?.books && !bookId) {
+      const personalBook = booksData.books.find((book) => book.type === "personal");
+      if (personalBook) {
+        setCurrentBookId(personalBook.id);
+      } else if (booksData.books.length > 0) {
+        setCurrentBookId(booksData.books[0].id);
+      } else {
+        toast.error("가계부를 찾을 수 없습니다.");
+        router.push("/book");
       }
-    };
+    }
+  }, [booksData, bookId, setCurrentBookId, router]);
 
-    loadData();
-  }, [router]);
+  // 카테고리 목록 조회
+  const { data: categoriesData, isLoading: isLoadingCategories } = useCategories(bookId);
+  
+  const categories = categoriesData?.categories || [];
+  const isLoading = isLoadingBooks || isLoadingCategories;
 
   const handleSave = useCallback(() => {
     // searchParams 유지하면서 목록 페이지로 이동

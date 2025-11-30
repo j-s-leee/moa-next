@@ -2,9 +2,19 @@
 
 import { useState, useEffect } from "react";
 import * as React from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { AppLayout } from "@/components/app-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { ArrowLeft, Check, Plus, Loader2, type LucideIcon } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -17,6 +27,8 @@ import {
 import { cn } from "@/lib/utils";
 import * as LucideIcons from "lucide-react";
 import { toast } from "sonner";
+import { categorySchema, type CategoryFormData } from "@/lib/validations";
+import { useCreateCategory } from "@/lib/react-query/queries";
 
 // Lucide 아이콘 목록
 const iconNames = [
@@ -213,12 +225,16 @@ export default function AddCategoryPage() {
   const bookId = searchParams.get("bookId");
   const typeParam = searchParams.get("type") as "expense" | "income" | null;
 
-  const [categoryName, setCategoryName] = useState("");
-  const [selectedIconName, setSelectedIconName] = useState<string | null>(null);
-  const [categoryType, setCategoryType] = useState<"expense" | "income">(
-    typeParam || "expense"
-  );
-  const [isSaving, setIsSaving] = useState(false);
+  const form = useForm<CategoryFormData>({
+    resolver: zodResolver(categorySchema),
+    defaultValues: {
+      name: "",
+      icon: null,
+      type: typeParam || "expense",
+    },
+  });
+
+  const createCategory = useCreateCategory();
 
   useEffect(() => {
     if (!bookId) {
@@ -227,58 +243,34 @@ export default function AddCategoryPage() {
     }
   }, [bookId, router]);
 
-  const handleIconSelect = (iconName: string) => {
-    setSelectedIconName(iconName);
-  };
-
   const handleBack = () => {
     router.push("/book/category");
   };
 
-  const handleSave = async () => {
+  const onSubmit = async (data: CategoryFormData) => {
     if (!bookId) {
       toast.error("가계부 정보가 없습니다.");
       return;
     }
 
-    if (!categoryName.trim()) {
-      toast.error("카테고리 이름을 입력해주세요.");
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      const response = await fetch(`/api/book/${bookId}/category`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+    createCategory.mutate(
+      {
+        bookId,
+        data: {
+          name: data.name.trim(),
+          icon: data.icon,
+          type: data.type,
         },
-        body: JSON.stringify({
-          name: categoryName.trim(),
-          icon: selectedIconName,
-          type: categoryType,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "카테고리 생성 실패");
+      },
+      {
+        onSuccess: () => {
+          router.push("/book/category");
+        },
       }
-
-      toast.success("카테고리가 생성되었습니다.");
-      router.push("/book/category");
-    } catch (error) {
-      console.error("카테고리 생성 오류:", error);
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "카테고리 생성 중 오류가 발생했습니다."
-      );
-    } finally {
-      setIsSaving(false);
-    }
+    );
   };
 
+  const selectedIconName = form.watch("icon");
   const selectedIcon = selectedIconName
     ? ((LucideIcons as any)[selectedIconName] as LucideIcon)
     : null;
@@ -287,7 +279,7 @@ export default function AddCategoryPage() {
     <AppLayout
       title="카테고리 추가"
       leftAction={
-        <Button variant="ghost" size="icon" onClick={handleBack} disabled={isSaving}>
+        <Button variant="ghost" size="icon" onClick={handleBack} disabled={createCategory.isPending}>
           <ArrowLeft className="size-4" />
           <span className="sr-only">뒤로가기</span>
         </Button>
@@ -296,10 +288,10 @@ export default function AddCategoryPage() {
         <Button
           variant="ghost"
           size="icon"
-          onClick={handleSave}
-          disabled={isSaving || !categoryName.trim()}
+          onClick={form.handleSubmit(onSubmit)}
+          disabled={createCategory.isPending || !form.watch("name")?.trim()}
         >
-          {isSaving ? (
+          {createCategory.isPending ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (
             <Check className="size-4" />
@@ -308,55 +300,86 @@ export default function AddCategoryPage() {
         </Button>
       }
     >
-      <div className="space-y-6">
-        <div className="flex items-center gap-2">
-          <IconDrawer
-            selectedIconName={selectedIconName}
-            onSelectIcon={handleIconSelect}
-          >
-            <Button variant="outline" size="icon" className="size-12">
-              {selectedIcon ? (
-                <selectedIcon className="size-6" />
-              ) : (
-                <Plus className="size-6" />
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+          <div className="flex items-center gap-2">
+            <FormField
+              control={form.control}
+              name="icon"
+              render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <IconDrawer
+                      selectedIconName={field.value || null}
+                      onSelectIcon={field.onChange}
+                    >
+                      <Button type="button" variant="outline" size="icon" className="size-12">
+                        {selectedIcon ? (
+                          <selectedIcon className="size-6" />
+                        ) : (
+                          <Plus className="size-6" />
+                        )}
+                      </Button>
+                    </IconDrawer>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
               )}
-            </Button>
-          </IconDrawer>
+            />
 
-          <Input
-            id="name"
-            placeholder="카테고리명을 입력하세요"
-            value={categoryName}
-            onChange={(e) => setCategoryName(e.target.value)}
-            disabled={isSaving}
-            maxLength={50}
-          />
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-sm font-medium">카테고리 타입</label>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              variant={categoryType === "expense" ? "default" : "outline"}
-              onClick={() => setCategoryType("expense")}
-              disabled={isSaving}
-              className="flex-1"
-            >
-              지출
-            </Button>
-            <Button
-              type="button"
-              variant={categoryType === "income" ? "default" : "outline"}
-              onClick={() => setCategoryType("income")}
-              disabled={isSaving}
-              className="flex-1"
-            >
-              수입
-            </Button>
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem className="flex-1">
+                  <FormControl>
+                    <Input
+                      placeholder="카테고리명을 입력하세요"
+                      {...field}
+                      disabled={form.formState.isSubmitting}
+                      maxLength={50}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
           </div>
-        </div>
-      </div>
+
+          <FormField
+            control={form.control}
+            name="type"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>카테고리 타입</FormLabel>
+                <FormControl>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant={field.value === "expense" ? "default" : "outline"}
+                      onClick={() => field.onChange("expense")}
+                      disabled={form.formState.isSubmitting}
+                      className="flex-1"
+                    >
+                      지출
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={field.value === "income" ? "default" : "outline"}
+                      onClick={() => field.onChange("income")}
+                      disabled={form.formState.isSubmitting}
+                      className="flex-1"
+                    >
+                      수입
+                    </Button>
+                  </div>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </form>
+      </Form>
     </AppLayout>
   );
 }

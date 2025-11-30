@@ -1,12 +1,22 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { AppLayout } from "@/components/app-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import {
   Drawer,
   DrawerContent,
@@ -25,6 +35,9 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import * as LucideIcons from "lucide-react";
+import { budgetSchema, type BudgetFormData } from "@/lib/validations";
+import { useBooks, useCategories, useCreateBudget } from "@/lib/react-query/queries";
+import { useBookStore } from "@/lib/stores/book-store";
 
 interface Category {
   id: string;
@@ -118,156 +131,120 @@ function CategoryDrawer({
 
 export default function AddBudgetPage() {
   const router = useRouter();
-  const [bookId, setBookId] = useState<string | null>(null);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [type, setType] = useState<"monthly" | "yearly">("monthly");
-  const [categoryId, setCategoryId] = useState<string>("");
-  const [amount, setAmount] = useState<string>("");
-  const [isRecurring, setIsRecurring] = useState(true);
+  const { currentBookId, setCurrentBookId } = useBookStore();
 
-  // 반복 예산용
-  const [startDate, setStartDate] = useState<Date | undefined>(new Date());
+  const form = useForm<BudgetFormData>({
+    resolver: zodResolver(budgetSchema),
+    defaultValues: {
+      categoryId: "",
+      amount: "",
+      period: "monthly",
+      isRecurring: true,
+      startDate: new Date(),
+      specificDate: new Date(),
+    },
+  });
 
-  // 비반복 예산용
-  const [specificDate, setSpecificDate] = useState<Date | undefined>(
-    new Date()
-  );
+  const period = form.watch("period");
+  const isRecurring = form.watch("isRecurring");
 
-  // 가계부 ID 및 카테고리 로드
+  // 가계부 목록 조회
+  const { data: booksData, isLoading: isLoadingBooks } = useBooks();
+  
+  // 가계부가 로드되면 첫 번째 개인 가계부를 선택
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        // 개인 가계부 목록 조회
-        const booksResponse = await fetch("/api/book");
-        if (!booksResponse.ok) {
-          throw new Error("가계부 목록 조회에 실패했습니다.");
-        }
-        const booksData = await booksResponse.json();
-        const personalBook = booksData.books?.[0]; // 첫 번째 개인 가계부 사용
-
-        if (!personalBook) {
-          toast.error("가계부를 찾을 수 없습니다.");
-          router.push("/book");
-          return;
-        }
-
-        setBookId(personalBook.id);
-
-        // 카테고리 목록 조회 (지출 카테고리만)
-        const categoriesResponse = await fetch(
-          `/api/book/${personalBook.id}/category?type=expense`
-        );
-        if (!categoriesResponse.ok) {
-          throw new Error("카테고리 목록 조회에 실패했습니다.");
-        }
-        const categoriesData = await categoriesResponse.json();
-        setCategories(categoriesData.categories || []);
-      } catch (error) {
-        console.error("데이터 로드 오류:", error);
-        toast.error(
-          error instanceof Error ? error.message : "데이터 로드에 실패했습니다."
-        );
-      } finally {
-        setIsLoading(false);
+    if (booksData?.books && !currentBookId) {
+      const personalBook = booksData.books.find((book) => book.type === "personal");
+      if (personalBook) {
+        setCurrentBookId(personalBook.id);
+      } else if (booksData.books.length > 0) {
+        setCurrentBookId(booksData.books[0].id);
+      } else {
+        toast.error("가계부를 찾을 수 없습니다.");
+        router.push("/book");
       }
-    };
+    }
+  }, [booksData, currentBookId, setCurrentBookId, router]);
 
-    loadData();
-  }, [router]);
+  // 카테고리 목록 조회 (지출 카테고리만)
+  const { data: categoriesData, isLoading: isLoadingCategories } = useCategories(currentBookId);
+  
+  const categories = (categoriesData?.categories || []).filter(
+    (cat) => cat.type === "expense"
+  ) as Category[];
+  const isLoading = isLoadingBooks || isLoadingCategories;
 
+  const categoryId = form.watch("categoryId");
   const selectedCategory = categories.find((c) => c.id === categoryId);
+  const createBudget = useCreateBudget();
 
-  const handleSave = async () => {
-    if (!bookId) {
+  const onSubmit = async (data: BudgetFormData) => {
+    if (!currentBookId) {
       toast.error("가계부를 찾을 수 없습니다.");
       return;
     }
 
-    if (!categoryId || !amount) {
-      toast.error("카테고리와 금액을 입력해주세요.");
-      return;
-    }
+    // 날짜 계산
+    let start: Date;
+    let end: Date;
 
-    if (isRecurring && !startDate) {
-      toast.error("시작일을 선택해주세요.");
-      return;
-    }
-
-    if (!isRecurring && !specificDate) {
-      toast.error("기간을 선택해주세요.");
-      return;
-    }
-
-    setIsSaving(true);
-
-    try {
-      // 날짜 계산
-      let start: Date;
-      let end: Date;
-
-      if (isRecurring) {
-        // 반복 예산: 시작일부터 미래까지 (2099-12-31)
-        start = new Date(startDate!);
-        start.setHours(0, 0, 0, 0);
-        if (type === "monthly") {
-          // 월의 첫 날로 설정
-          start.setDate(1);
-        } else {
-          // 연도의 첫 날로 설정
-          start.setMonth(0, 1);
-        }
-        end = new Date("2099-12-31T23:59:59.999Z");
-      } else {
-        // 비반복 예산: 특정 기간
-        if (type === "monthly") {
-          start = new Date(specificDate!);
-          start.setDate(1);
-          start.setHours(0, 0, 0, 0);
-          end = new Date(specificDate!);
-          end.setMonth(end.getMonth() + 1);
-          end.setDate(0); // 해당 월의 마지막 날
-          end.setHours(23, 59, 59, 999);
-        } else {
-          start = new Date(specificDate!);
-          start.setMonth(0, 1);
-          start.setHours(0, 0, 0, 0);
-          end = new Date(specificDate!);
-          end.setMonth(11, 31);
-          end.setHours(23, 59, 59, 999);
-        }
+    if (data.isRecurring) {
+      // 반복 예산: 시작일부터 미래까지 (2099-12-31)
+      if (!data.startDate) {
+        toast.error("시작일을 선택해주세요.");
+        return;
       }
+      start = new Date(data.startDate);
+      start.setHours(0, 0, 0, 0);
+      if (data.period === "monthly") {
+        // 월의 첫 날로 설정
+        start.setDate(1);
+      } else {
+        // 연도의 첫 날로 설정
+        start.setMonth(0, 1);
+      }
+      end = new Date("2099-12-31T23:59:59.999Z");
+    } else {
+      // 비반복 예산: 특정 기간
+      if (!data.specificDate) {
+        toast.error("기간을 선택해주세요.");
+        return;
+      }
+      if (data.period === "monthly") {
+        start = new Date(data.specificDate);
+        start.setDate(1);
+        start.setHours(0, 0, 0, 0);
+        end = new Date(data.specificDate);
+        end.setMonth(end.getMonth() + 1);
+        end.setDate(0); // 해당 월의 마지막 날
+        end.setHours(23, 59, 59, 999);
+      } else {
+        start = new Date(data.specificDate);
+        start.setMonth(0, 1);
+        start.setHours(0, 0, 0, 0);
+        end = new Date(data.specificDate);
+        end.setMonth(11, 31);
+        end.setHours(23, 59, 59, 999);
+      }
+    }
 
-      const response = await fetch(`/api/book/${bookId}/budget`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          categoryId,
-          period: type,
-          amount: Number(amount),
+    createBudget.mutate(
+      {
+        bookId: currentBookId,
+        data: {
+          categoryId: data.categoryId,
+          period: data.period,
+          amount: Number(data.amount),
           startDate: start.toISOString(),
           endDate: end.toISOString(),
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "예산 추가에 실패했습니다.");
+        },
+      },
+      {
+        onSuccess: () => {
+          router.push("/book/budget");
+        },
       }
-
-      toast.success("예산이 추가되었습니다.");
-      router.push("/book/budget");
-    } catch (error) {
-      console.error("예산 추가 오류:", error);
-      toast.error(
-        error instanceof Error ? error.message : "예산 추가에 실패했습니다."
-      );
-    } finally {
-      setIsSaving(false);
-    }
+    );
   };
 
   const handleBack = () => {
@@ -288,10 +265,10 @@ export default function AddBudgetPage() {
         <Button
           variant="ghost"
           size="icon"
-          onClick={handleSave}
-          disabled={isSaving || isLoading}
+          onClick={form.handleSubmit(onSubmit)}
+          disabled={createBudget.isPending || isLoading}
         >
-          {isSaving ? (
+          {createBudget.isPending ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (
             <Check className="size-4" />
@@ -300,200 +277,262 @@ export default function AddBudgetPage() {
         </Button>
       }
     >
-      <div className="space-y-6">
-        <Tabs
-          value={type}
-          onValueChange={(v) => setType(v as "monthly" | "yearly")}
-        >
-          <TabsList className="mx-auto mb-6">
-            <TabsTrigger value="monthly">월간</TabsTrigger>
-            <TabsTrigger value="yearly">연간</TabsTrigger>
-          </TabsList>
-        </Tabs>
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+          <FormField
+            control={form.control}
+            name="period"
+            render={({ field }) => (
+              <FormItem>
+                <FormControl>
+                  <Tabs
+                    value={field.value}
+                    onValueChange={(v) => field.onChange(v as "monthly" | "yearly")}
+                  >
+                    <TabsList className="mx-auto mb-6">
+                      <TabsTrigger value="monthly">월간</TabsTrigger>
+                      <TabsTrigger value="yearly">연간</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
-        <div className="space-y-2">
-          <Label htmlFor="category">카테고리</Label>
-          <CategoryDrawer
-            selectedCategoryId={categoryId}
-            onSelectCategory={setCategoryId}
-            categories={categories}
-          >
-            <Button
-              variant="outline"
-              className="w-full justify-start text-left font-normal"
-              disabled={isLoading}
-            >
-              {selectedCategory ? (
-                <>
-                  {selectedCategory.icon &&
-                  (LucideIcons[selectedCategory.icon as keyof typeof LucideIcons] as LucideIcon) ? (
-                    <>
-                      {(() => {
-                        const IconComponent = LucideIcons[
-                          selectedCategory.icon as keyof typeof LucideIcons
-                        ] as LucideIcon;
-                        return <IconComponent className="mr-2 h-4 w-4" />;
-                      })()}
-                      {selectedCategory.name}
-                    </>
-                  ) : (
-                    <>
-                      <span className="mr-2">{selectedCategory.icon || "📦"}</span>
-                      {selectedCategory.name}
-                    </>
-                  )}
-                </>
-              ) : (
-                "카테고리 선택"
+          <FormField
+            control={form.control}
+            name="categoryId"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>카테고리</FormLabel>
+                <FormControl>
+                  <CategoryDrawer
+                    selectedCategoryId={field.value || null}
+                    onSelectCategory={field.onChange}
+                    categories={categories}
+                  >
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full justify-start text-left font-normal"
+                      disabled={isLoading}
+                    >
+                      {selectedCategory ? (
+                        <>
+                          {selectedCategory.icon &&
+                          (LucideIcons[selectedCategory.icon as keyof typeof LucideIcons] as LucideIcon) ? (
+                            <>
+                              {(() => {
+                                const IconComponent = LucideIcons[
+                                  selectedCategory.icon as keyof typeof LucideIcons
+                                ] as LucideIcon;
+                                return <IconComponent className="mr-2 h-4 w-4" />;
+                              })()}
+                              {selectedCategory.name}
+                            </>
+                          ) : (
+                            <>
+                              <span className="mr-2">{selectedCategory.icon || "📦"}</span>
+                              {selectedCategory.name}
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        "카테고리 선택"
+                      )}
+                    </Button>
+                  </CategoryDrawer>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="amount"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>금액</FormLabel>
+                <FormControl>
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    placeholder="금액을 입력하세요"
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="isRecurring"
+            render={({ field }) => (
+              <FormItem>
+                <div className="flex items-center justify-between">
+                  <FormLabel className="cursor-pointer">
+                    {period === "monthly" ? "매월 자동 적용" : "매년 자동 적용"}
+                  </FormLabel>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </div>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {isRecurring ? (
+            <FormField
+              control={form.control}
+              name="startDate"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>시작 {period === "monthly" ? "월" : "연도"}</FormLabel>
+                  <FormControl>
+                    {period === "monthly" ? (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className={cn(
+                              "w-full justify-start text-left font-normal",
+                              !field.value && "text-muted-foreground"
+                            )}
+                          >
+                            {field.value
+                              ? `${field.value.getFullYear()}년 ${
+                                  field.value.getMonth() + 1
+                                }월`
+                              : "시작 월 선택"}
+                            <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={field.value}
+                            onSelect={field.onChange}
+                            captionLayout="dropdown"
+                            defaultMonth={field.value}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    ) : (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className={cn(
+                              "w-full justify-start text-left font-normal",
+                              !field.value && "text-muted-foreground"
+                            )}
+                          >
+                            {field.value
+                              ? `${field.value.getFullYear()}년`
+                              : "시작 연도 선택"}
+                            <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={field.value}
+                            onSelect={field.onChange}
+                            captionLayout="dropdown"
+                            defaultMonth={field.value}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    )}
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
               )}
-            </Button>
-          </CategoryDrawer>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="amount">금액</Label>
-          <Input
-            id="amount"
-            type="number"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            placeholder="금액을 입력하세요"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-          />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <Label htmlFor="recurring" className="cursor-pointer">
-            {type === "monthly" ? "매월 자동 적용" : "매년 자동 적용"}
-          </Label>
-          <Switch
-            id="recurring"
-            checked={isRecurring}
-            onCheckedChange={setIsRecurring}
-          />
-        </div>
-
-        {isRecurring ? (
-          <div className="space-y-2">
-            <Label>시작 {type === "monthly" ? "월" : "연도"}</Label>
-            {type === "monthly" ? (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full justify-start text-left font-normal",
-                      !startDate && "text-muted-foreground"
+            />
+          ) : (
+            <FormField
+              control={form.control}
+              name="specificDate"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{period === "monthly" ? "적용 월" : "적용 연도"}</FormLabel>
+                  <FormControl>
+                    {period === "monthly" ? (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className={cn(
+                              "w-full justify-start text-left font-normal",
+                              !field.value && "text-muted-foreground"
+                            )}
+                          >
+                            {field.value
+                              ? `${field.value.getFullYear()}년 ${
+                                  field.value.getMonth() + 1
+                                }월`
+                              : "월 선택"}
+                            <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={field.value}
+                            onSelect={field.onChange}
+                            captionLayout="dropdown"
+                            defaultMonth={field.value}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    ) : (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className={cn(
+                              "w-full justify-start text-left font-normal",
+                              !field.value && "text-muted-foreground"
+                            )}
+                          >
+                            {field.value
+                              ? `${field.value.getFullYear()}년`
+                              : "연도 선택"}
+                            <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={field.value}
+                            onSelect={field.onChange}
+                            captionLayout="dropdown"
+                            defaultMonth={field.value}
+                          />
+                        </PopoverContent>
+                      </Popover>
                     )}
-                  >
-                    {startDate
-                      ? `${startDate.getFullYear()}년 ${
-                          startDate.getMonth() + 1
-                        }월`
-                      : "시작 월 선택"}
-                    <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={startDate}
-                    onSelect={setStartDate}
-                    captionLayout="dropdown"
-                    defaultMonth={startDate}
-                  />
-                </PopoverContent>
-              </Popover>
-            ) : (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full justify-start text-left font-normal",
-                      !startDate && "text-muted-foreground"
-                    )}
-                  >
-                    {startDate
-                      ? `${startDate.getFullYear()}년`
-                      : "시작 연도 선택"}
-                    <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={startDate}
-                    onSelect={setStartDate}
-                    captionLayout="dropdown"
-                    defaultMonth={startDate}
-                  />
-                </PopoverContent>
-              </Popover>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <Label>{type === "monthly" ? "적용 월" : "적용 연도"}</Label>
-            {type === "monthly" ? (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full justify-start text-left font-normal",
-                      !specificDate && "text-muted-foreground"
-                    )}
-                  >
-                    {specificDate
-                      ? `${specificDate.getFullYear()}년 ${
-                          specificDate.getMonth() + 1
-                        }월`
-                      : "월 선택"}
-                    <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={specificDate}
-                    onSelect={setSpecificDate}
-                    captionLayout="dropdown"
-                    defaultMonth={specificDate}
-                  />
-                </PopoverContent>
-              </Popover>
-            ) : (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full justify-start text-left font-normal",
-                      !specificDate && "text-muted-foreground"
-                    )}
-                  >
-                    {specificDate
-                      ? `${specificDate.getFullYear()}년`
-                      : "연도 선택"}
-                    <ChevronDown className="ml-auto h-4 w-4 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={specificDate}
-                    onSelect={setSpecificDate}
-                    captionLayout="dropdown"
-                    defaultMonth={specificDate}
-                  />
-                </PopoverContent>
-              </Popover>
-            )}
-          </div>
-        )}
-      </div>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
+        </form>
+      </Form>
     </AppLayout>
   );
 }

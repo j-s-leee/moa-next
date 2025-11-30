@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import * as LucideIcons from "lucide-react";
 import { toast } from "sonner";
+import { useCategory, useUpdateCategory } from "@/lib/react-query/queries";
 
 // Lucide 아이콘 목록
 const iconNames = [
@@ -316,44 +317,37 @@ export default function EditCategoryPage() {
   const bookId = params.bookId as string;
   const categoryId = params.id as string;
 
-  const [category, setCategory] = useState<Category | null>(null);
   const [categoryName, setCategoryName] = useState("");
   const [selectedIcon, setSelectedIcon] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
 
   // 카테고리 정보 조회
+  const { data: category, isLoading, error } = useCategory(bookId, categoryId);
+  const updateCategory = useUpdateCategory();
+
+  // 카테고리 데이터 로드
   useEffect(() => {
-    if (!bookId || !categoryId) return;
+    if (category) {
+      setCategoryName(category.name || "");
+      setSelectedIcon(category.icon || null);
+    }
+  }, [category]);
 
-    async function fetchCategory() {
-      setIsLoading(true);
-      try {
-        const response = await fetch(`/api/book/${bookId}/category/${categoryId}`);
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.error || "카테고리 조회 실패");
-        }
-
-        const data = await response.json();
-        setCategory(data);
-        setCategoryName(data.name || "");
-        setSelectedIcon(data.icon || null);
-      } catch (error) {
-        console.error("카테고리 조회 오류:", error);
+  // 에러 처리
+  useEffect(() => {
+    if (error) {
+      if (error instanceof Error && error.message === "카테고리를 찾을 수 없습니다.") {
+        toast.error("카테고리를 찾을 수 없습니다.");
+        router.push(`/book/${bookId}/category`);
+      } else {
         toast.error(
           error instanceof Error
             ? error.message
             : "카테고리를 불러오는 중 오류가 발생했습니다."
         );
         router.push(`/book/${bookId}/category`);
-      } finally {
-        setIsLoading(false);
       }
     }
-
-    fetchCategory();
-  }, [bookId, categoryId, router]);
+  }, [error, router, bookId]);
 
   const handleIconSelect = (icon: string) => {
     setSelectedIcon(icon);
@@ -363,7 +357,7 @@ export default function EditCategoryPage() {
     router.push(`/book/${bookId}/category`);
   };
 
-  const handleSave = async () => {
+  const handleSave = () => {
     if (!bookId || !categoryId) {
       toast.error("가계부 정보가 없습니다.");
       return;
@@ -374,36 +368,21 @@ export default function EditCategoryPage() {
       return;
     }
 
-    setIsSaving(true);
-    try {
-      const response = await fetch(`/api/book/${bookId}/category/${categoryId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+    updateCategory.mutate(
+      {
+        bookId,
+        categoryId,
+        data: {
           name: categoryName.trim(),
           icon: selectedIcon,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "카테고리 수정 실패");
+        },
+      },
+      {
+        onSuccess: () => {
+          router.push(`/book/${bookId}/category`);
+        },
       }
-
-      toast.success("카테고리가 수정되었습니다.");
-      router.push(`/book/${bookId}/category`);
-    } catch (error) {
-      console.error("카테고리 수정 오류:", error);
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "카테고리 수정 중 오류가 발생했습니다."
-      );
-    } finally {
-      setIsSaving(false);
-    }
+    );
   };
 
   // 선택된 아이콘 렌더링용 컴포넌트
@@ -438,7 +417,7 @@ export default function EditCategoryPage() {
     <AppLayout
       title="카테고리 수정"
       leftAction={
-        <Button variant="ghost" size="icon" onClick={handleBack} disabled={isSaving}>
+        <Button variant="ghost" size="icon" onClick={handleBack} disabled={updateCategory.isPending}>
           <ArrowLeft className="size-4" />
           <span className="sr-only">뒤로가기</span>
         </Button>
@@ -448,9 +427,9 @@ export default function EditCategoryPage() {
           variant="ghost"
           size="icon"
           onClick={handleSave}
-          disabled={isSaving || !categoryName.trim()}
+          disabled={updateCategory.isPending || !categoryName.trim()}
         >
-          {isSaving ? (
+          {updateCategory.isPending ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (
             <Check className="size-4" />
@@ -481,7 +460,7 @@ export default function EditCategoryPage() {
             placeholder="카테고리명을 입력하세요"
             value={categoryName}
             onChange={(e) => setCategoryName(e.target.value)}
-            disabled={isSaving}
+            disabled={updateCategory.isPending}
             maxLength={50}
           />
         </div>

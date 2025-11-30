@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { budgets, books, categories, expenses } from '@/lib/db/schema'
 import { eq, and, lte, gte, ne } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
-import { parseDateStringToDate, isValidDateString } from '@/lib/utils/date'
+import { parseDateStringToDate, isValidDateString, normalizeDateString, formatDateToString } from '@/lib/utils/date'
 
 /**
  * 예산 수정 API
@@ -84,10 +84,11 @@ export async function PUT(
     const { amount, startDate, endDate } = body
 
     // 업데이트할 필드 구성
+    // PgDateString은 string 타입이므로 문자열로 저장
     const updateData: {
       amount?: number
-      startDate?: Date
-      endDate?: Date
+      startDate?: string
+      endDate?: string
       previousBudgetId?: string
       updatedAt: Date
     } = {
@@ -106,46 +107,73 @@ export async function PUT(
     }
 
     // 날짜 수정
-    let newStartDate = existingBudget.startDate
-    let newEndDate = existingBudget.endDate
+    // existingBudget의 날짜는 문자열이므로 그대로 사용
+    let newStartDateStr = existingBudget.startDate
+    let newEndDateStr = existingBudget.endDate
+    let newStartDate: Date | null = null
+    let newEndDate: Date | null = null
 
     if (startDate) {
       try {
-        if (typeof startDate !== 'string' || !isValidDateString(startDate)) {
+        if (typeof startDate !== 'string') {
+          return NextResponse.json(
+            { error: '시작일은 문자열 형식이어야 합니다.' },
+            { status: 400 }
+          )
+        }
+        // ISO 형식 또는 YYYY-MM-DD 형식을 YYYY-MM-DD로 정규화
+        const normalizedStartDate = normalizeDateString(startDate)
+        if (!isValidDateString(normalizedStartDate)) {
           return NextResponse.json(
             { error: '시작일은 YYYY-MM-DD 형식이어야 합니다.' },
             { status: 400 }
           )
         }
-        newStartDate = parseDateStringToDate(startDate)
-        updateData.startDate = newStartDate
+        newStartDate = parseDateStringToDate(normalizedStartDate)
+        newStartDateStr = normalizedStartDate
+        updateData.startDate = normalizedStartDate
       } catch (error) {
         return NextResponse.json(
           { error: error instanceof Error ? error.message : '잘못된 시작일 형식입니다.' },
           { status: 400 }
         )
       }
+    } else {
+      // 기존 날짜를 Date 객체로 변환 (비교용)
+      newStartDate = parseDateStringToDate(existingBudget.startDate)
     }
 
     if (endDate) {
       try {
-        if (typeof endDate !== 'string' || !isValidDateString(endDate)) {
+        if (typeof endDate !== 'string') {
+          return NextResponse.json(
+            { error: '종료일은 문자열 형식이어야 합니다.' },
+            { status: 400 }
+          )
+        }
+        // ISO 형식 또는 YYYY-MM-DD 형식을 YYYY-MM-DD로 정규화
+        const normalizedEndDate = normalizeDateString(endDate)
+        if (!isValidDateString(normalizedEndDate)) {
           return NextResponse.json(
             { error: '종료일은 YYYY-MM-DD 형식이어야 합니다.' },
             { status: 400 }
           )
         }
-        newEndDate = parseDateStringToDate(endDate)
-        updateData.endDate = newEndDate
+        newEndDate = parseDateStringToDate(normalizedEndDate)
+        newEndDateStr = normalizedEndDate
+        updateData.endDate = normalizedEndDate
       } catch (error) {
         return NextResponse.json(
           { error: error instanceof Error ? error.message : '잘못된 종료일 형식입니다.' },
           { status: 400 }
         )
       }
+    } else {
+      // 기존 날짜를 Date 객체로 변환 (비교용)
+      newEndDate = parseDateStringToDate(existingBudget.endDate)
     }
 
-    if (newStartDate > newEndDate) {
+    if (newStartDate && newEndDate && newStartDate > newEndDate) {
       return NextResponse.json(
         { error: '시작일은 종료일보다 이전이어야 합니다.' },
         { status: 400 }
@@ -164,9 +192,9 @@ export async function PUT(
             eq(budgets.period, existingBudget.period),
             // 자기 자신은 제외
             ne(budgets.id, id),
-            // 기간이 겹치는 경우
-            lte(budgets.startDate, newEndDate),
-            gte(budgets.endDate, newStartDate)
+            // 기간이 겹치는 경우: PgDateString은 string 타입이므로 문자열로 비교
+            lte(budgets.startDate, newEndDateStr),
+            gte(budgets.endDate, newStartDateStr)
           )
         )
         .limit(1)
