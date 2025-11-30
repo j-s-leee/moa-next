@@ -13,6 +13,19 @@ export function isValidDateString(dateString: string): boolean {
 }
 
 /**
+ * ISO 형식(YYYY-MM-DDTHH:mm:ss.sssZ) 또는 YYYY-MM-DD 형식의 날짜 문자열을
+ * YYYY-MM-DD 형식으로 변환합니다.
+ */
+export function normalizeDateString(dateString: string): string {
+  // ISO 형식인 경우 (예: "2024-01-01T00:00:00.000Z")
+  if (dateString.includes('T')) {
+    return dateString.split('T')[0]
+  }
+  // 이미 YYYY-MM-DD 형식인 경우
+  return dateString
+}
+
+/**
  * YYYY-MM-DD 형식의 날짜 문자열을 DateTime 객체로 변환합니다.
  * @throws {Error} 유효하지 않은 날짜 형식인 경우
  */

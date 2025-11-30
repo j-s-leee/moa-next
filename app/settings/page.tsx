@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { toast } from "sonner";
+import { useEffect } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, User, Mail, Image as ImageIcon } from "lucide-react";
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 import { Button } from "@/components/ui/button";
@@ -14,88 +15,48 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { AppLayout } from "@/components/app-layout";
-
-interface UserProfile {
-  id: string;
-  email: string;
-  name: string | null;
-  avatarUrl: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
+import { profileSchema, type ProfileFormData } from "@/lib/validations";
+import { useUserProfile, useUpdateUserProfile } from "@/lib/react-query/queries/user";
 
 export default function SettingsPage() {
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [formData, setFormData] = useState({
-    name: "",
-    avatarUrl: "",
+  const { data: profile, isLoading, error } = useUserProfile();
+  const updateProfile = useUpdateUserProfile();
+
+  const form = useForm<ProfileFormData>({
+    resolver: zodResolver(profileSchema),
+    defaultValues: {
+      name: "",
+      avatarUrl: "",
+    },
   });
 
-  // 프로필 조회
+  // 프로필 데이터가 로드되면 폼 초기화
   useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        const response = await fetch("/api/user/profile");
-        if (!response.ok) {
-          throw new Error("프로필을 불러올 수 없습니다.");
-        }
-        const data = await response.json();
-        setProfile(data);
-        setFormData({
-          name: data.name || "",
-          avatarUrl: data.avatarUrl || "",
-        });
-      } catch (error) {
-        console.error("프로필 조회 오류:", error);
-        toast.error("프로필을 불러오는 중 오류가 발생했습니다.");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchProfile();
-  }, []);
+    if (profile) {
+      form.reset({
+        name: profile.name || "",
+        avatarUrl: profile.avatarUrl || "",
+      });
+    }
+  }, [profile, form]);
 
   // 프로필 수정
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-
-    try {
-      const response = await fetch("/api/user/profile", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          name: formData.name.trim() || null,
-          avatarUrl: formData.avatarUrl.trim() || null,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "프로필 수정에 실패했습니다.");
-      }
-
-      const updatedProfile = await response.json();
-      setProfile(updatedProfile);
-      toast.success("프로필이 성공적으로 수정되었습니다.");
-    } catch (error) {
-      console.error("프로필 수정 오류:", error);
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "프로필 수정 중 오류가 발생했습니다."
-      );
-    } finally {
-      setSaving(false);
-    }
+  const onSubmit = async (data: ProfileFormData) => {
+    updateProfile.mutate({
+      name: data.name ? data.name.trim() || null : null,
+      avatarUrl: data.avatarUrl ? data.avatarUrl.trim() || null : null,
+    });
   };
 
   // 이름 초기값 생성 (이메일에서 추출)
@@ -111,7 +72,10 @@ export default function SettingsPage() {
     return email[0].toUpperCase();
   };
 
-  if (loading) {
+  const avatarUrl = form.watch("avatarUrl");
+  const name = form.watch("name");
+
+  if (isLoading) {
     return (
       <AppLayout>
         <div className="flex items-center justify-center min-h-[400px]">
@@ -121,7 +85,7 @@ export default function SettingsPage() {
     );
   }
 
-  if (!profile) {
+  if (error || !profile) {
     return (
       <AppLayout>
         <Card>
@@ -150,87 +114,103 @@ export default function SettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* 프로필 이미지 */}
-              <div className="flex items-center gap-6">
-                <Avatar className="h-20 w-20">
-                  <AvatarImage src={formData.avatarUrl || undefined} />
-                  <AvatarFallback className="text-lg">
-                    {getInitials(formData.name, profile.email)}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="flex-1">
-                  <Label htmlFor="avatarUrl" className="flex items-center gap-2">
-                    <ImageIcon className="h-4 w-4" />
-                    프로필 이미지 URL
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+                {/* 프로필 이미지 */}
+                <FormField
+                  control={form.control}
+                  name="avatarUrl"
+                  render={({ field }) => (
+                    <FormItem>
+                      <div className="flex items-center gap-6">
+                        <Avatar className="h-20 w-20">
+                          <AvatarImage src={field.value ?? undefined} />
+                          <AvatarFallback className="text-lg">
+                            {getInitials(name ?? null, profile.email)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1">
+                          <FormLabel className="flex items-center gap-2">
+                            <ImageIcon className="h-4 w-4" />
+                            프로필 이미지 URL
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type="url"
+                              placeholder="https://example.com/avatar.jpg"
+                              {...field}
+                              value={field.value ?? ""}
+                              className="mt-2"
+                            />
+                          </FormControl>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            이미지 URL을 입력하세요.
+                          </p>
+                          <FormMessage />
+                        </div>
+                      </div>
+                    </FormItem>
+                  )}
+                />
+
+                <Separator />
+
+                {/* 이름 */}
+                <FormField
+                  control={form.control}
+                  name="name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="flex items-center gap-2">
+                        <User className="h-4 w-4" />
+                        이름
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          type="text"
+                          placeholder="이름을 입력하세요"
+                          {...field}
+                          value={field.value ?? ""}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* 이메일 (읽기 전용) */}
+                <div className="space-y-2">
+                  <Label htmlFor="email" className="flex items-center gap-2">
+                    <Mail className="h-4 w-4" />
+                    이메일
                   </Label>
                   <Input
-                    id="avatarUrl"
-                    type="url"
-                    placeholder="https://example.com/avatar.jpg"
-                    value={formData.avatarUrl}
-                    onChange={(e) =>
-                      setFormData({ ...formData, avatarUrl: e.target.value })
-                    }
-                    className="mt-2"
+                    id="email"
+                    type="email"
+                    value={profile.email}
+                    disabled
+                    className="bg-muted cursor-not-allowed"
                   />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    이미지 URL을 입력하세요.
+                  <p className="text-xs text-muted-foreground">
+                    이메일은 변경할 수 없습니다.
                   </p>
                 </div>
-              </div>
 
-              <Separator />
-
-              {/* 이름 */}
-              <div className="space-y-2">
-                <Label htmlFor="name" className="flex items-center gap-2">
-                  <User className="h-4 w-4" />
-                  이름
-                </Label>
-                <Input
-                  id="name"
-                  type="text"
-                  placeholder="이름을 입력하세요"
-                  value={formData.name}
-                  onChange={(e) =>
-                    setFormData({ ...formData, name: e.target.value })
-                  }
-                />
-              </div>
-
-              {/* 이메일 (읽기 전용) */}
-              <div className="space-y-2">
-                <Label htmlFor="email" className="flex items-center gap-2">
-                  <Mail className="h-4 w-4" />
-                  이메일
-                </Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={profile.email}
-                  disabled
-                  className="bg-muted cursor-not-allowed"
-                />
-                <p className="text-xs text-muted-foreground">
-                  이메일은 변경할 수 없습니다.
-                </p>
-              </div>
-
-              {/* 저장 버튼 */}
-              <div className="flex justify-end">
-                <Button type="submit" disabled={saving}>
-                  {saving ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      저장 중...
-                    </>
-                  ) : (
-                    "저장"
-                  )}
-                </Button>
-              </div>
-            </form>
+                {/* 저장 버튼 */}
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={updateProfile.isPending}>
+                    {updateProfile.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        저장 중...
+                      </>
+                    ) : (
+                      "저장"
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </Form>
           </CardContent>
         </Card>
 

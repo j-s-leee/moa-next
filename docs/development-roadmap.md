@@ -4,7 +4,7 @@
 
 이 문서는 The Moa 프로젝트의 개발 순서와 진척도를 추적합니다. 다른 AI agent가 이어서 작업할 수 있도록 명확하게 작성되었습니다.
 
-**마지막 업데이트**: 2024년 12월 (예산 관리 기능 및 예산 자동 제안 기능 완료)
+**마지막 업데이트**: 2024년 12월 (Phase 4.5 개발 도구 도입 진행 중)
 
 ---
 
@@ -251,7 +251,7 @@
 - [x] 단발성 수입(단일 거래) 지원 - date 필드로 단일 거래 수입 관리
 - [x] 단일 거래 수입 삭제 기능
 - [x] 단일 거래 수입과 지출 통합 표시 - 지출 탭에 함께 표시
-- [ ] 수입 수정 기능 (향후 구현)
+- [ ] 수입 수정 기능 (단일거래 수정)
 - [x] 수입 삭제 기능
 - [x] 기간 구분 (월간/연간) - 반복 수입만
 - [ ] 수입 이체 기능 (개인 → 공동, 향후)
@@ -378,6 +378,122 @@
 
 ---
 
+## Phase 4.5: TanStack Query 도입
+
+### 4.5.1 기본 설정 및 마이그레이션
+
+- [x] `@tanstack/react-query` 설치
+- [x] QueryClient 설정 및 Provider 설정
+- [x] 기본 옵션 설정 (staleTime, gcTime 등)
+- [x] 핵심 쿼리 파일 생성 (`lib/react-query/queries/`)
+  - [x] 가계부 목록 조회 쿼리 (`books.ts`)
+  - [x] 지출 목록 조회 쿼리 (`expenses.ts`)
+  - [x] 수입 목록 조회 쿼리 (`incomes.ts`)
+  - [x] 예산 목록 조회 쿼리 (`budgets.ts`)
+  - [x] 카테고리 목록 조회 쿼리 (`categories.ts`)
+  - [x] 사용자 정보 조회 쿼리 (`user.ts`)
+- [x] Mutation 구현 (낙관적 업데이트 포함)
+  - [x] 지출 추가/수정/삭제 Mutation
+  - [x] 수입 추가/수정/삭제 Mutation
+  - [x] 예산 추가/수정/삭제 Mutation
+  - [x] 카테고리 추가/수정/삭제/순서변경 Mutation
+  - [x] 사용자 프로필 조회/수정 Mutation
+- [x] 실제 페이지에서 쿼리 사용 (마이그레이션 완료)
+  - [x] `app/book/page.tsx` - 지출/수입 목록 및 삭제
+  - [x] `app/book/budget/page.tsx` - 예산 목록 및 삭제
+  - [x] `app/book/[bookId]/category/page.tsx` - 카테고리 목록, 삭제, 순서 변경
+  - [x] `app/book/add/page.tsx` - 지출/수입 추가
+  - [x] `app/book/budget/add/page.tsx` - 예산 추가
+  - [x] `app/book/budget/suggest/page.tsx` - 예산 제안
+  - [x] `app/book/category/add/page.tsx` - 카테고리 추가
+  - [x] `app/book/[bookId]/category/edit/[id]/page.tsx` - 카테고리 수정
+  - [x] `app/book/edit/[id]/page.tsx` - 지출/수입 수정
+  - [x] `app/settings/page.tsx` - 프로필 조회/수정
+
+**참고 문서**: `docs/tanstack-query-review.md` - 도입 검토 및 계획
+
+**진척도**: 95% 완료 ✅
+
+**우선순위**: 🟡 중간 (Phase 5 시작 전 권장)
+
+**예상 작업 시간**: 8-12시간
+
+**도입 이유**:
+
+- Phase 5 (대시보드) 개발 시 여러 데이터 소스를 효율적으로 관리
+- 캐싱 및 자동 동기화로 사용자 경험 개선
+- Phase 6 (공동 가계부) 개발 시 실시간 동기화에 유리
+- 코드 중복 제거 및 개발 생산성 향상
+
+**주의사항**:
+
+- 점진적 마이그레이션 전략 사용 (Phase 5부터 새 기능에 적용)
+- 기존 Phase 3-4 코드는 필요 시 점진적으로 리팩토링
+- 기존 기능 동작에 영향 없도록 주의
+
+### 4.5.2 폼 관리 도구 도입 (React Hook Form + Zod)
+
+- [x] `react-hook-form` 설치
+- [x] `@hookform/resolvers` 설치
+- [x] Zod 스키마 정의 (`lib/validations/`)
+  - [x] 지출 폼 스키마 (`expense.ts`)
+  - [x] 수입 폼 스키마 (`income.ts`)
+  - [x] 예산 폼 스키마 (`budget.ts`)
+  - [x] 카테고리 폼 스키마 (`category.ts`)
+  - [x] 프로필 폼 스키마 (`profile.ts`)
+- [x] shadcn/ui Form 컴포넌트 생성 (`components/ui/form.tsx`)
+- [x] 기존 폼 컴포넌트 마이그레이션 진행 중
+  - [x] `app/book/add/page.tsx` (지출/수입 폼)
+  - [x] `app/book/budget/add/page.tsx`
+  - [x] `app/book/category/add/page.tsx`
+  - [x] `app/settings/page.tsx` (프로필 폼)
+  - [x] `app/book/edit/[id]/page.tsx` (가계부 수정)
+- [x] API 라우트에서 Zod 스키마 사용 (18개 파일)
+
+**참고 문서**: `docs/additional-tools-review.md` - 추가 도구 검토
+
+**진척도**: 95% 완료 ✅
+
+**우선순위**: 🔴 최우선 (TanStack Query와 함께 또는 그 전에)
+
+**예상 작업 시간**: 4-6시간
+
+**도입 이유**:
+
+- 현재 폼 코드가 많고 복잡함 (수동 검증, 에러 처리)
+- Zod가 이미 설치되어 있으나 미사용
+- 폼 코드 50-70% 감소 예상
+- 타입 안전한 검증으로 버그 감소
+- shadcn/ui와 완벽 호환
+
+### 4.5.3 개발 도구 설정
+
+- [x] Prettier 설치 및 설정
+  - [x] `.prettierrc` 설정 파일 생성
+  - [x] `.prettierignore` 설정
+  - [x] package.json 스크립트 추가 (`format`, `format:check`)
+  - [ ] VS Code 설정 (format on save) - 사용자 설정 필요
+- [ ] React Error Boundary 구현
+  - [ ] `components/error-boundary.tsx` 생성
+  - [ ] `app/layout.tsx`에 ErrorBoundary 추가
+  - [ ] 에러 화면 UI 구현
+
+**참고 문서**: `docs/additional-tools-review.md` - 추가 도구 검토
+
+**진척도**: 50% 완료 ✅
+
+**우선순위**: 🟡 중간
+
+**예상 작업 시간**: 3-5시간
+
+**도입 이유**:
+
+- 코드 포맷팅 일관성 향상
+- 에러 발생 시 사용자 친화적인 화면 제공
+- 개발 생산성 향상
+
+---
+
 ## Phase 5: 대시보드 및 통계
 
 ### 5.1 개인 가계부 대시보드
@@ -413,6 +529,46 @@
 **우선순위**: 🟢 낮음 (Phase 4 이후)
 
 **예상 작업 시간**: 8-10시간
+
+---
+
+## Phase 5.5: 전역 상태 관리 도입 (Zustand)
+
+### 5.5.1 Zustand 기본 설정
+
+- [x] `zustand` 설치
+- [x] 기본 Store 구조 설계
+  - [x] `lib/stores/book-store.ts` - 가계부 관련 상태
+  - [x] `lib/stores/user-store.ts` - 사용자 관련 상태
+- [x] 기본 Store 구현
+  - [x] 가계부 목록 관리 (개인 + 공동)
+  - [x] 현재 선택된 가계부 관리
+  - [x] 사용자 정보 관리
+  - [ ] 파트너 정보 관리 (공동 가계부용) - 향후 구현
+- [x] TanStack Query와 연동 (`lib/react-query/queries/books.ts`)
+
+**참고 문서**: `docs/zustand-review.md` - Zustand 도입 시점 검토
+
+**진척도**: 80% 완료 ✅
+
+**우선순위**: 🟡 중간 (Phase 6 시작 전 필수)
+
+**예상 작업 시간**: 2-3시간
+
+**도입 이유**:
+
+- Phase 6 (공동 가계부) 개발 시 **반드시 필요**
+- 가계부 전환 기능 (개인 ↔ 공동) 구현에 필수
+- 가계부 목록 중복 fetch 문제 해결
+- 사용자/파트너 정보 전역 관리
+- 실시간 동기화를 위한 상태 관리
+- TanStack Query와 함께 사용 시 강력한 조합
+
+**주의사항**:
+
+- Phase 5 (대시보드) 개발 중 필요해지면 먼저 도입 가능
+- 기본 설정만 하고, Phase 6 개발하면서 점진적으로 활용
+- TanStack Query와 함께 사용 (서버 상태 vs 클라이언트 상태 구분)
 
 ---
 
@@ -598,16 +754,23 @@
 - ✅ 지출 내역 관리 (CRUD API 및 UI, 단일 거래 수입 통합)
 - ✅ 수입 내역 관리 (단일 거래 및 반복 수입 지원, UI 통합)
 - ✅ 예산 관리 기능 (CRUD API, 예산 대비 지출 추적, 예산 자동 제안)
+- ✅ React Hook Form + Zod 도입 (스키마 정의 및 폼 마이그레이션 완료)
+- ✅ Prettier 설정 완료
+- ✅ TanStack Query 도입 완료 (기본 설정, 쿼리 파일 생성, 실제 페이지 마이그레이션 완료)
+- ✅ Zustand 기본 설정 및 Store 구현 완료
 
 ### 진행 중인 작업
 
-- ⏳ 없음
+- ⏳ **Phase 4.5.3**: React Error Boundary 구현 (Prettier 및 TanStack Query 마이그레이션 완료)
 
 ### 다음 우선 작업 (순서대로)
 
-1. **Phase 3.3**: 지출 내역 관리 - 카테고리별/기간별 필터링
-2. **Phase 4.1**: 예산 수정 UI 개선 (현재 API만 있음)
-3. **Phase 5**: 대시보드 및 통계 (데이터 연동)
+1. **Phase 4.5.3**: React Error Boundary 구현 (Prettier는 완료, TanStack Query 마이그레이션 완료)
+2. **Phase 3.3**: 지출 내역 관리 - 카테고리별/기간별 필터링
+3. **Phase 4.1**: 예산 수정 UI 개선 (현재 API만 있음)
+4. **Phase 5**: 대시보드 및 통계 (데이터 연동)
+5. **Phase 5.5**: Zustand 파트너 정보 관리 추가 (Phase 6 시작 전 필수)
+6. **Phase 6**: 공동 가계부 기능 개발
 
 ---
 
@@ -648,9 +811,13 @@
 
 - Frontend: Next.js 14+, React, TypeScript
 - UI: Tailwind CSS, shadcn/ui, Lucide Icons
+- Data Fetching: TanStack Query ✅ (Phase 4.5.1 도입 완료, 마이그레이션 진행 중)
+- State Management: Zustand ✅ (Phase 5.5.1 기본 설정 완료)
+- Form Management: React Hook Form + Zod ✅ (Phase 4.5.2 도입 완료)
 - Backend: Supabase
 - Database: Supabase (PostgreSQL)
 - ORM: Drizzle ORM
+- Code Formatting: Prettier ✅ (Phase 4.5.3 설정 완료)
 
 ### 문서 참고
 
@@ -660,6 +827,9 @@
 - `docs/information-architecture.md`: UI 구조 및 사용자 플로우
 - `docs/competitive-analysis.md`: 경쟁사 분석
 - `docs/kpi.md`: 성과 지표
+- `docs/tanstack-query-review.md`: TanStack Query 도입 검토 및 계획
+- `docs/additional-tools-review.md`: 추가 도구 도입 검토 (React Hook Form, Prettier 등)
+- `docs/zustand-review.md`: Zustand (전역 상태 관리) 도입 시점 검토
 
 ---
 

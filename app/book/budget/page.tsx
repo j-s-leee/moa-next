@@ -38,33 +38,12 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { useBooks, useBudgets, useExpenses, useDeleteBudget, type ExpenseItem as QueryExpenseItem, type Budget } from "@/lib/react-query/queries";
+import { useBookStore } from "@/lib/stores/book-store";
+import { DateTime } from "luxon";
 
-interface Budget {
-  id: string;
-  bookId: string;
-  categoryId: string;
-  category: {
-    id: string;
-    name: string;
-    icon: string | null;
-    type: "expense" | "income";
-    expenseType?: "fixed" | "variable" | "annual" | "one-time" | null;
-  };
-  period: "monthly" | "yearly";
-  amount: number;
-  startDate: string; // ISO string
-  endDate: string; // ISO string
-  previousBudgetId: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface ExpenseItem {
-  id: string;
-  categoryId: string;
-  amount: number;
-  date: string; // ISO string
-}
+// ExpenseItem은 쿼리 훅에서 import한 타입 사용
+type ExpenseItem = Pick<QueryExpenseItem, "id" | "categoryId" | "amount" | "date">;
 
 interface BudgetUsage {
   spent: number;
@@ -72,7 +51,14 @@ interface BudgetUsage {
   remaining: number;
 }
 
-interface BudgetWithUsage extends Budget {
+interface BudgetWithUsage extends Omit<Budget, 'category'> {
+  category: {
+    id: string;
+    name: string;
+    icon: string | null;
+    type: "expense" | "income";
+    expenseType?: "fixed" | "variable" | "annual" | "one-time" | null;
+  }; // filter로 null 제외했으므로 항상 존재
   categoryName: string;
   categoryIcon: LucideIcon | null;
   spent: number;
@@ -489,132 +475,72 @@ function YearSelector({
 
 export default function BudgetPage() {
   const router = useRouter();
-  const [bookId, setBookId] = useState<string | null>(null);
-  const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { currentBookId, setCurrentBookId } = useBookStore();
+  const bookId = currentBookId;
+  
   const [activeTab, setActiveTab] = useState<"monthly" | "yearly">("monthly");
   const [selectedMonth, setSelectedMonth] = useState(new Date());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  // 가계부 ID 및 예산 데이터 로드
+  
+  // 가계부 목록 조회
+  const { data: booksData, isLoading: isLoadingBooks } = useBooks();
+  
+  // 가계부가 로드되면 첫 번째 개인 가계부를 선택
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        // 개인 가계부 목록 조회
-        const booksResponse = await fetch("/api/book");
-        if (!booksResponse.ok) {
-          throw new Error("가계부 목록 조회에 실패했습니다.");
-        }
-        const booksData = await booksResponse.json();
-        const personalBook = booksData.books?.[0];
-
-        if (!personalBook) {
-          toast.error("가계부를 찾을 수 없습니다.");
-          router.push("/book");
-          return;
-        }
-
-        setBookId(personalBook.id);
-        await loadBudgetsAndExpenses(personalBook.id);
-      } catch (error) {
-        console.error("데이터 로드 오류:", error);
-        toast.error(
-          error instanceof Error ? error.message : "데이터 로드에 실패했습니다."
-        );
-      } finally {
-        setIsLoading(false);
+    if (booksData?.books && !bookId) {
+      const personalBook = booksData.books.find((book) => book.type === "personal");
+      if (personalBook) {
+        setCurrentBookId(personalBook.id);
+      } else if (booksData.books.length > 0) {
+        setCurrentBookId(booksData.books[0].id);
+      } else {
+        toast.error("가계부를 찾을 수 없습니다.");
+        router.push("/book");
       }
-    };
-
-    loadData();
-  }, [router]);
-
-  // 예산 및 지출 데이터 로드
-  const loadBudgetsAndExpenses = async (bookId: string) => {
-    try {
-      const year = activeTab === "monthly" ? selectedMonth.getFullYear() : selectedYear;
-      const month = activeTab === "monthly" ? selectedMonth.getMonth() + 1 : undefined;
-
-      // 예산 목록 조회
-      const budgetParams = new URLSearchParams({
-        period: activeTab,
-        year: year.toString(),
-      });
-      if (month) {
-        budgetParams.append("month", month.toString());
-      }
-
-      const budgetsResponse = await fetch(
-        `/api/book/${bookId}/budget?${budgetParams.toString()}`
-      );
-      if (!budgetsResponse.ok) {
-        throw new Error("예산 목록 조회에 실패했습니다.");
-      }
-      const budgetsData = await budgetsResponse.json();
-      setBudgets(budgetsData.budgets || []);
-
-      // 지출 내역 조회 (사용량 계산용)
-      const startDate = activeTab === "monthly"
-        ? new Date(year, month! - 1, 1)
-        : new Date(year, 0, 1);
-      const endDate = activeTab === "monthly"
-        ? new Date(year, month!, 0, 23, 59, 59, 999)
-        : new Date(year, 11, 31, 23, 59, 59, 999);
-
-      const expensesResponse = await fetch(
-        `/api/book/${bookId}/expense?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`
-      );
-      if (!expensesResponse.ok) {
-        throw new Error("지출 내역 조회에 실패했습니다.");
-      }
-      const expensesData = await expensesResponse.json();
-      setExpenses(expensesData.expenses || []);
-    } catch (error) {
-      console.error("데이터 로드 오류:", error);
-      toast.error(
-        error instanceof Error ? error.message : "데이터 로드에 실패했습니다."
-      );
     }
-  };
-
-  // 탭 또는 날짜 변경 시 데이터 다시 로드
-  useEffect(() => {
-    if (bookId) {
-      loadBudgetsAndExpenses(bookId);
-    }
-  }, [bookId, activeTab, selectedMonth, selectedYear]);
+  }, [booksData, bookId, setCurrentBookId, router]);
+  
+  // 날짜 범위 계산
+  const year = activeTab === "monthly" ? selectedMonth.getFullYear() : selectedYear;
+  const month = activeTab === "monthly" ? selectedMonth.getMonth() + 1 : undefined;
+  
+  const startDate = activeTab === "monthly"
+    ? DateTime.fromObject({ year, month: month!, day: 1 })
+    : DateTime.fromObject({ year, month: 1, day: 1 });
+  const endDate = activeTab === "monthly"
+    ? DateTime.fromObject({ year, month: month!, day: 1 }).endOf("month")
+    : DateTime.fromObject({ year, month: 12, day: 31 }).endOf("year");
+  
+  // 예산 목록 조회
+  const { data: budgetsData, isLoading: isLoadingBudgets } = useBudgets(
+    bookId,
+    activeTab,
+    year,
+    month
+  );
+  
+  // 지출 목록 조회
+  const { data: expensesData, isLoading: isLoadingExpenses } = useExpenses(
+    bookId,
+    startDate,
+    endDate
+  );
+  
+  const budgets = budgetsData?.budgets || [];
+  const expenses = expensesData?.expenses || [];
+  const isLoading = isLoadingBooks || isLoadingBudgets || isLoadingExpenses;
+  
+  // 예산 삭제
+  const deleteBudget = useDeleteBudget();
 
   const handleEdit = (budget: BudgetWithUsage) => {
     // TODO: 예산 수정 모달/다이얼로그 구현
     toast.info("예산 수정 기능은 곧 추가될 예정입니다.");
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = (id: string) => {
     if (!bookId) return;
-
-    setDeletingId(id);
-    try {
-      const response = await fetch(`/api/book/${bookId}/budget/${id}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "예산 삭제에 실패했습니다.");
-      }
-
-      toast.success("예산이 삭제되었습니다.");
-      await loadBudgetsAndExpenses(bookId);
-    } catch (error) {
-      console.error("예산 삭제 오류:", error);
-      toast.error(
-        error instanceof Error ? error.message : "예산 삭제에 실패했습니다."
-      );
-    } finally {
-      setDeletingId(null);
-    }
+    deleteBudget.mutate({ bookId, budgetId: id });
   };
 
   const handleAdd = () => {
@@ -630,28 +556,35 @@ export default function BudgetPage() {
   );
 
   // 예산에 카테고리 정보와 사용량 추가
-  const budgetsWithUsage: BudgetWithUsage[] = activeBudgets.map((budget) => {
-    const IconComponent = budget.category.icon
-      ? (LucideIcons[budget.category.icon as keyof typeof LucideIcons] as LucideIcon)
-      : null;
+  const budgetsWithUsage: BudgetWithUsage[] = activeBudgets
+    .filter((budget) => budget.category !== null) // 카테고리가 없는 예산 제외
+    .map((budget) => {
+      if (!budget.category) {
+        // 타입 가드: 이미 filter로 제외했지만 TypeScript를 위해 추가
+        throw new Error("카테고리가 없는 예산입니다.");
+      }
 
-    const usage =
-      activeTab === "monthly"
-        ? calculateMonthlyBudgetUsage(
-            budget,
-            expenses,
-            selectedMonth.getFullYear(),
-            selectedMonth.getMonth() + 1
-          )
-        : calculateYearlyBudgetUsage(budget, expenses, selectedYear);
+      const IconComponent = budget.category.icon
+        ? (LucideIcons[budget.category.icon as keyof typeof LucideIcons] as LucideIcon)
+        : null;
 
-    return {
-      ...budget,
-      categoryName: budget.category.name,
-      categoryIcon: IconComponent,
-      ...usage,
-    };
-  });
+      const usage =
+        activeTab === "monthly"
+          ? calculateMonthlyBudgetUsage(
+              budget,
+              expenses,
+              selectedMonth.getFullYear(),
+              selectedMonth.getMonth() + 1
+            )
+          : calculateYearlyBudgetUsage(budget, expenses, selectedYear);
+
+      return {
+        ...budget,
+        categoryName: budget.category.name,
+        categoryIcon: IconComponent,
+        ...usage,
+      };
+    });
 
   // 예산 대비 지출 차트 데이터 준비
   const chartData = budgetsWithUsage.map((budget) => ({
@@ -815,7 +748,7 @@ export default function BudgetPage() {
                         budget={budget}
                         onEdit={handleEdit}
                         onDelete={handleDelete}
-                        isDeleting={deletingId === budget.id}
+                        isDeleting={deleteBudget.isPending && deleteBudget.variables?.budgetId === budget.id}
                       />
                     ))}
                   </div>
@@ -879,7 +812,7 @@ export default function BudgetPage() {
                         budget={budget}
                         onEdit={handleEdit}
                         onDelete={handleDelete}
-                        isDeleting={deletingId === budget.id}
+                        isDeleting={deleteBudget.isPending && deleteBudget.variables?.budgetId === budget.id}
                       />
                     ))}
                   </div>

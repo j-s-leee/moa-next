@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   IconCreditCard,
@@ -27,41 +26,21 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { createClientComponentClient } from "@/lib/supabase/client";
-
-interface UserProfile {
-  name: string | null;
-  email: string;
-  avatarUrl: string | null;
-}
+import { useUserProfile } from "@/lib/react-query/queries/user";
 
 export function NavUser() {
   const { isMobile } = useSidebar();
   const router = useRouter();
-  const [user, setUser] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data: profile, isLoading: loading } = useUserProfile();
 
-  // 사용자 프로필 조회
-  useEffect(() => {
-    const fetchUserProfile = async () => {
-      try {
-        const response = await fetch("/api/user/profile");
-        if (response.ok) {
-          const data = await response.json();
-          setUser({
-            name: data.name || "사용자",
-            email: data.email,
-            avatarUrl: data.avatarUrl,
-          });
-        }
-      } catch (error) {
-        console.error("프로필 조회 오류:", error);
-      } finally {
-        setLoading(false);
+  // 프로필 데이터 변환
+  const user = profile
+    ? {
+        name: profile.name || "사용자",
+        email: profile.email,
+        avatarUrl: profile.avatarUrl,
       }
-    };
-
-    fetchUserProfile();
-  }, []);
+    : null;
 
   const handleLogout = async () => {
     const supabase = createClientComponentClient();

@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { budgets, books, categories, expenses } from '@/lib/db/schema'
 import { eq, and, gte, lte, sql } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
-import { parseDateStringToDate, isValidDateString, getMonthRange, getYearRange } from '@/lib/utils/date'
+import { parseDateStringToDate, isValidDateString, getMonthRange, getYearRange, formatDateTimeToString, formatDateToString, normalizeDateString } from '@/lib/utils/date'
 
 /**
  * 예산 목록 조회 API
@@ -77,16 +77,18 @@ export async function GET(
             const { start: startOfMonth, end: endOfMonth } = getMonthRange(year, month)
             
             // 예산의 startDate <= 월의 마지막일 AND 예산의 endDate >= 월의 1일
-            whereConditions.push(lte(budgets.startDate, endOfMonth.toJSDate()))
-            whereConditions.push(gte(budgets.endDate, startOfMonth.toJSDate()))
+            // PgDateString은 string 타입이므로 문자열로 변환
+            whereConditions.push(lte(budgets.startDate, formatDateTimeToString(endOfMonth)))
+            whereConditions.push(gte(budgets.endDate, formatDateTimeToString(startOfMonth)))
           }
         } else {
           // 연간 필터링: 해당 년의 1월 1일 ~ 12월 31일
           const { start: startOfYear, end: endOfYear } = getYearRange(year)
           
           // 예산의 startDate <= 년의 마지막일 AND 예산의 endDate >= 년의 1일
-          whereConditions.push(lte(budgets.startDate, endOfYear.toJSDate()))
-          whereConditions.push(gte(budgets.endDate, startOfYear.toJSDate()))
+          // PgDateString은 string 타입이므로 문자열로 변환
+          whereConditions.push(lte(budgets.startDate, formatDateTimeToString(endOfYear)))
+          whereConditions.push(gte(budgets.endDate, formatDateTimeToString(startOfYear)))
         }
       }
     }
@@ -229,13 +231,21 @@ export async function POST(
     let end: Date
 
     try {
-      if (typeof startDate !== 'string' || !isValidDateString(startDate)) {
+      if (typeof startDate !== 'string') {
+        return NextResponse.json(
+          { error: '시작일은 문자열 형식이어야 합니다.' },
+          { status: 400 }
+        )
+      }
+      // ISO 형식 또는 YYYY-MM-DD 형식을 YYYY-MM-DD로 정규화
+      const normalizedStartDate = normalizeDateString(startDate)
+      if (!isValidDateString(normalizedStartDate)) {
         return NextResponse.json(
           { error: '시작일은 YYYY-MM-DD 형식이어야 합니다.' },
           { status: 400 }
         )
       }
-      start = parseDateStringToDate(startDate)
+      start = parseDateStringToDate(normalizedStartDate)
     } catch (error) {
       return NextResponse.json(
         { error: error instanceof Error ? error.message : '잘못된 시작일 형식입니다.' },
@@ -244,13 +254,21 @@ export async function POST(
     }
 
     try {
-      if (typeof endDate !== 'string' || !isValidDateString(endDate)) {
+      if (typeof endDate !== 'string') {
+        return NextResponse.json(
+          { error: '종료일은 문자열 형식이어야 합니다.' },
+          { status: 400 }
+        )
+      }
+      // ISO 형식 또는 YYYY-MM-DD 형식을 YYYY-MM-DD로 정규화
+      const normalizedEndDate = normalizeDateString(endDate)
+      if (!isValidDateString(normalizedEndDate)) {
         return NextResponse.json(
           { error: '종료일은 YYYY-MM-DD 형식이어야 합니다.' },
           { status: 400 }
         )
       }
-      end = parseDateStringToDate(endDate)
+      end = parseDateStringToDate(normalizedEndDate)
     } catch (error) {
       return NextResponse.json(
         { error: error instanceof Error ? error.message : '잘못된 종료일 형식입니다.' },
@@ -287,6 +305,7 @@ export async function POST(
 
     // 같은 가계부의 같은 카테고리에 대해 중복 기간 예산 확인
     // 기간이 겹치는 예산이 있는지 확인
+    // PgDateString은 string 타입이므로 Date를 문자열로 변환
     const overlappingBudgets = await db
       .select()
       .from(budgets)
@@ -296,8 +315,8 @@ export async function POST(
           eq(budgets.categoryId, categoryId),
           eq(budgets.period, period),
           // 기간이 겹치는 경우: (startDate <= end AND endDate >= start)
-          lte(budgets.startDate, end),
-          gte(budgets.endDate, start)
+          lte(budgets.startDate, formatDateToString(end)),
+          gte(budgets.endDate, formatDateToString(start))
         )
       )
       .limit(1)
@@ -310,6 +329,7 @@ export async function POST(
     }
 
     // 예산 생성
+    // PgDateString은 string 타입이므로 Date를 문자열로 변환
     const [newBudget] = await db
       .insert(budgets)
       .values({
@@ -317,8 +337,8 @@ export async function POST(
         categoryId,
         period,
         amount: Math.round(amount), // 소수점 제거
-        startDate: start,
-        endDate: end,
+        startDate: formatDateToString(start),
+        endDate: formatDateToString(end),
         updatedAt: new Date(),
       })
       .returning({

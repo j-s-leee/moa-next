@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+.next/
+out/
+build/
+
+# Environment files
+.env
+.env.*
+
+# Drizzle
+drizzle/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+
+# Generated files
+next-env.d.ts
+package-lock.json
+

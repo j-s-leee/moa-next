@@ -34,6 +34,8 @@ import {
 } from "@/components/ui/button-group";
 import * as LucideIcons from "lucide-react";
 import { toast } from "sonner";
+import { useBooks, useExpenses, useIncomes, useDeleteExpense, useDeleteIncome, type ExpenseItem as QueryExpenseItem, type IncomeItem as QueryIncomeItem } from "@/lib/react-query/queries";
+import { useBookStore } from "@/lib/stores/book-store";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -429,8 +431,6 @@ function DailyExpenseList({
   incomes,
   isLoading,
   bookId,
-  onExpenseUpdate,
-  onIncomeUpdate,
   typeFilter,
   sortBy,
   onFilterChange,
@@ -441,15 +441,13 @@ function DailyExpenseList({
   incomes: IncomeItem[];
   isLoading: boolean;
   bookId: string | null;
-  onExpenseUpdate: (bookId: string) => void;
-  onIncomeUpdate: (bookId: string) => void;
   typeFilter: string;
   sortBy: string;
   onFilterChange: (filter: string) => void;
   onSortChange: (sort: string) => void;
 }) {
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deletingIncomeId, setDeletingIncomeId] = useState<string | null>(null);
+  const deleteExpense = useDeleteExpense();
+  const deleteIncome = useDeleteIncome();
 
   const handleDelete = async (expenseId: string) => {
     if (!bookId) {
@@ -457,43 +455,7 @@ function DailyExpenseList({
       return;
     }
 
-    setDeletingId(expenseId);
-
-    try {
-      const response = await fetch(`/api/book/${bookId}/expense/${expenseId}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        let errorMessage = "지출 삭제에 실패했습니다.";
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch {
-          // JSON 파싱 실패 시 기본 메시지 사용
-        }
-        throw new Error(errorMessage);
-      }
-
-      // 응답이 성공이면 (200-299 범위) - 응답 본문이 없을 수도 있음
-      try {
-        await response.json();
-      } catch {
-        // 응답 본문이 없거나 파싱 실패해도 성공으로 처리
-      }
-
-      toast.success("지출이 삭제되었습니다.");
-      if (bookId) {
-        onExpenseUpdate(bookId);
-      }
-    } catch (error) {
-      console.error("지출 삭제 오류:", error);
-      toast.error(
-        error instanceof Error ? error.message : "지출 삭제에 실패했습니다."
-      );
-    } finally {
-      setDeletingId(null);
-    }
+    deleteExpense.mutate({ bookId, expenseId });
   };
 
   const handleDeleteIncome = async (incomeId: string) => {
@@ -502,36 +464,7 @@ function DailyExpenseList({
       return;
     }
 
-    setDeletingIncomeId(incomeId);
-
-    try {
-      const response = await fetch(`/api/book/${bookId}/income/${incomeId}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        let errorMessage = "수입 삭제에 실패했습니다.";
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch {
-          // JSON 파싱 실패 시 기본 메시지 사용
-        }
-        throw new Error(errorMessage);
-      }
-
-      toast.success("수입이 삭제되었습니다.");
-      if (bookId) {
-        onIncomeUpdate(bookId);
-      }
-    } catch (error) {
-      console.error("수입 삭제 오류:", error);
-      toast.error(
-        error instanceof Error ? error.message : "수입 삭제에 실패했습니다."
-      );
-    } finally {
-      setDeletingIncomeId(null);
-    }
+    deleteIncome.mutate({ bookId, incomeId });
   };
 
   // 날짜별로 그룹화 (지출 + 단일 거래 수입 + 반복 수입)
@@ -864,7 +797,7 @@ function DailyExpenseList({
                       const IconComponent = getIconComponent(
                         expense.category.icon
                       );
-                      const isDeleting = deletingId === expense.id;
+                      const isDeleting = deleteExpense.isPending && deleteExpense.variables?.expenseId === expense.id;
 
                       return (
                         <div
@@ -980,7 +913,7 @@ function DailyExpenseList({
                       const categoryName =
                         income.category?.name || income.source || "수입";
                       const categoryIcon = income.category?.icon || "💰";
-                      const isDeletingIncome = deletingIncomeId === income.id;
+                      const isDeletingIncome = deleteIncome.isPending && deleteIncome.variables?.incomeId === income.id;
 
                       return (
                         <div
@@ -1099,15 +1032,13 @@ function IncomeList({
   incomes,
   isLoading,
   bookId,
-  onIncomeUpdate,
 }: {
   selectedMonth: Date;
   incomes: IncomeItem[];
   isLoading: boolean;
   bookId: string | null;
-  onIncomeUpdate: (bookId: string) => void;
 }) {
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const deleteIncome = useDeleteIncome();
 
   const handleDelete = async (incomeId: string) => {
     if (!bookId) {
@@ -1115,36 +1046,7 @@ function IncomeList({
       return;
     }
 
-    setDeletingId(incomeId);
-
-    try {
-      const response = await fetch(`/api/book/${bookId}/income/${incomeId}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        let errorMessage = "수입 삭제에 실패했습니다.";
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch {
-          // JSON 파싱 실패 시 기본 메시지 사용
-        }
-        throw new Error(errorMessage);
-      }
-
-      toast.success("수입이 삭제되었습니다.");
-      if (bookId) {
-        onIncomeUpdate(bookId);
-      }
-    } catch (error) {
-      console.error("수입 삭제 오류:", error);
-      toast.error(
-        error instanceof Error ? error.message : "수입 삭제에 실패했습니다."
-      );
-    } finally {
-      setDeletingId(null);
-    }
+    deleteIncome.mutate({ bookId, incomeId });
   };
 
   // 반복 수입만 필터링 (period와 startDate가 있는 경우만)
@@ -1183,7 +1085,7 @@ function IncomeList({
 
         const startDate = new Date(income.startDate!);
         const endDate = income.endDate ? new Date(income.endDate) : null;
-        const isDeleting = deletingId === income.id;
+        const isDeleting = deleteIncome.isPending;
         const IconComponent = income.category
           ? getIconComponent(income.category.icon)
           : null;
@@ -1297,8 +1199,6 @@ function DateExpenseDrawer({
   expenses,
   incomes,
   bookId,
-  onExpenseUpdate,
-  onIncomeUpdate,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1306,11 +1206,9 @@ function DateExpenseDrawer({
   expenses: ExpenseItem[];
   incomes: IncomeItem[];
   bookId: string | null;
-  onExpenseUpdate: (bookId: string) => void;
-  onIncomeUpdate: (bookId: string) => void;
 }) {
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deletingIncomeId, setDeletingIncomeId] = useState<string | null>(null);
+  const deleteExpense = useDeleteExpense();
+  const deleteIncome = useDeleteIncome();
 
   if (!selectedDate) return null;
 
@@ -1366,44 +1264,14 @@ function DateExpenseDrawer({
       return;
     }
 
-    setDeletingId(expenseId);
-
-    try {
-      const response = await fetch(`/api/book/${bookId}/expense/${expenseId}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        let errorMessage = "지출 삭제에 실패했습니다.";
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch {
-          // JSON 파싱 실패 시 기본 메시지 사용
-        }
-        throw new Error(errorMessage);
+    deleteExpense.mutate(
+      { bookId, expenseId },
+      {
+        onSuccess: () => {
+          onOpenChange(false);
+        },
       }
-
-      // 응답이 성공이면 (200-299 범위) - 응답 본문이 없을 수도 있음
-      try {
-        await response.json();
-      } catch {
-        // 응답 본문이 없거나 파싱 실패해도 성공으로 처리
-      }
-
-      toast.success("지출이 삭제되었습니다.");
-      if (bookId) {
-        onExpenseUpdate(bookId);
-      }
-      onOpenChange(false);
-    } catch (error) {
-      console.error("지출 삭제 오류:", error);
-      toast.error(
-        error instanceof Error ? error.message : "지출 삭제에 실패했습니다."
-      );
-    } finally {
-      setDeletingId(null);
-    }
+    );
   };
 
   return (
@@ -1449,7 +1317,7 @@ function DateExpenseDrawer({
                     hour: "2-digit",
                     minute: "2-digit",
                   });
-                  const isDeleting = deletingId === expense.id;
+                  const isDeleting = deleteExpense.isPending && deleteExpense.variables?.expenseId === expense.id;
 
                   return (
                     <div
@@ -1561,7 +1429,7 @@ function DateExpenseDrawer({
                     hour: "2-digit",
                     minute: "2-digit",
                   });
-                  const isDeleting = deletingIncomeId === income.id;
+                  const isDeleting = deleteIncome.isPending && deleteIncome.variables?.incomeId === income.id;
 
                   const IconComponent = income.category
                     ? getIconComponent(income.category.icon)
@@ -1570,48 +1438,20 @@ function DateExpenseDrawer({
                     income.category?.name || income.source || "수입";
                   const categoryIcon = income.category?.icon || "💰";
 
-                  const handleIncomeDelete = async () => {
+                  const handleIncomeDelete = () => {
                     if (!bookId) {
                       toast.error("가계부를 찾을 수 없습니다.");
                       return;
                     }
 
-                    setDeletingIncomeId(income.id);
-
-                    try {
-                      const response = await fetch(
-                        `/api/book/${bookId}/income/${income.id}`,
-                        {
-                          method: "DELETE",
-                        }
-                      );
-
-                      if (!response.ok) {
-                        let errorMessage = "수입 삭제에 실패했습니다.";
-                        try {
-                          const errorData = await response.json();
-                          errorMessage = errorData.error || errorMessage;
-                        } catch {
-                          // JSON 파싱 실패 시 기본 메시지 사용
-                        }
-                        throw new Error(errorMessage);
+                    deleteIncome.mutate(
+                      { bookId, incomeId: income.id },
+                      {
+                        onSuccess: () => {
+                          onOpenChange(false);
+                        },
                       }
-
-                      toast.success("수입이 삭제되었습니다.");
-                      if (bookId) {
-                        onIncomeUpdate(bookId);
-                      }
-                      onOpenChange(false);
-                    } catch (error) {
-                      console.error("수입 삭제 오류:", error);
-                      toast.error(
-                        error instanceof Error
-                          ? error.message
-                          : "수입 삭제에 실패했습니다."
-                      );
-                    } finally {
-                      setDeletingIncomeId(null);
-                    }
+                    );
                   };
 
                   return (
@@ -1776,10 +1616,23 @@ export default function BookPage() {
   const [selectedCalendarDate, setSelectedCalendarDate] =
     useState<DateTime | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [bookId, setBookId] = useState<string | null>(null);
-  const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
-  const [incomes, setIncomes] = useState<IncomeItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { currentBookId, setCurrentBookId } = useBookStore();
+  const bookId = currentBookId;
+  
+  // 가계부 목록 조회
+  const { data: booksData, isLoading: isLoadingBooks } = useBooks();
+  
+  // 날짜 범위 계산
+  const startDate = selectedDate.startOf("month");
+  const endDate = startDate.plus({ month: 1 });
+  
+  // 지출/수입 목록 조회
+  const { data: expensesData, isLoading: isLoadingExpenses } = useExpenses(bookId, startDate, endDate);
+  const { data: incomesData, isLoading: isLoadingIncomes } = useIncomes(bookId, startDate, endDate);
+  
+  const expenses = expensesData?.expenses || [];
+  const incomes = incomesData?.incomes || [];
+  const isLoading = isLoadingBooks || isLoadingExpenses || isLoadingIncomes;
 
   // URL 파라미터 업데이트 함수
   const updateURLParams = useCallback(
@@ -1897,98 +1750,17 @@ export default function BookPage() {
     }
   }, [searchParams]);
 
-  // 가계부 ID 및 지출 목록 로드
+  // 가계부가 로드되면 첫 번째 개인 가계부를 선택
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        // 개인 가계부 목록 조회
-        const booksResponse = await fetch("/api/book");
-        if (!booksResponse.ok) {
-          throw new Error("가계부 목록 조회에 실패했습니다.");
-        }
-        const booksData = await booksResponse.json();
-        const personalBook = booksData.books?.[0]; // 첫 번째 개인 가계부 사용
-
-        if (!personalBook) {
-          toast.error("가계부를 찾을 수 없습니다.");
-          return;
-        }
-
-        setBookId(personalBook.id);
-        await loadExpenses(personalBook.id);
-        await loadIncomes(personalBook.id);
-      } catch (error) {
-        console.error("데이터 로드 오류:", error);
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : "데이터를 불러오는데 실패했습니다."
-        );
-      } finally {
-        setIsLoading(false);
+    if (booksData?.books && !bookId) {
+      const personalBook = booksData.books.find((book) => book.type === "personal");
+      if (personalBook) {
+        setCurrentBookId(personalBook.id);
+      } else if (booksData.books.length > 0) {
+        setCurrentBookId(booksData.books[0].id);
       }
-    };
-
-    loadData();
-  }, []);
-
-  // 선택된 월이 변경될 때 지출/수입 목록 다시 로드
-  useEffect(() => {
-    if (bookId) {
-      loadExpenses(bookId);
-      loadIncomes(bookId);
     }
-  }, [selectedDate, bookId]);
-
-  const loadExpenses = async (id: string) => {
-    try {
-      const startDate = selectedDate.startOf("month");
-      const endDate = startDate.plus({ month: 1 });
-
-      const response = await fetch(
-        `/api/book/${id}/expense?startDate=${startDate.toISODate()}&endDate=${endDate.toISODate()}`
-      );
-
-      if (!response.ok) {
-        throw new Error("지출 목록 조회에 실패했습니다.");
-      }
-
-      const data = await response.json();
-      setExpenses(data.expenses || []);
-    } catch (error) {
-      console.error("지출 목록 로드 오류:", error);
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "지출 목록을 불러오는데 실패했습니다."
-      );
-    }
-  };
-
-  const loadIncomes = async (id: string) => {
-    try {
-      const startDate = selectedDate;
-      const endDate = startDate.plus({ month: 1 });
-
-      const response = await fetch(
-        `/api/book/${id}/income?startDate=${startDate.toISODate()}&endDate=${endDate.toISODate()}`
-      );
-
-      if (!response.ok) {
-        throw new Error("수입 목록 조회에 실패했습니다.");
-      }
-
-      const data = await response.json();
-      setIncomes(data.incomes || []);
-    } catch (error) {
-      console.error("수입 목록 로드 오류:", error);
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "수입 목록을 불러오는데 실패했습니다."
-      );
-    }
-  };
+  }, [booksData, bookId, setCurrentBookId]);
 
   const handleCalendarDateSelect = (date: DateTime) => {
     setSelectedCalendarDate(date);
@@ -2026,8 +1798,6 @@ export default function BookPage() {
               incomes={incomes}
               isLoading={isLoading}
               bookId={bookId}
-              onExpenseUpdate={loadExpenses}
-              onIncomeUpdate={loadIncomes}
               typeFilter={typeFilter}
               sortBy={sortBy}
               onFilterChange={handleFilterChange}
@@ -2111,8 +1881,6 @@ export default function BookPage() {
         expenses={expenses}
         incomes={incomes}
         bookId={bookId}
-        onExpenseUpdate={loadExpenses}
-        onIncomeUpdate={loadIncomes}
       />
 
       {/* Floating Action Button */}
