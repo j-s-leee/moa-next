@@ -120,7 +120,7 @@ function CategoryDrawer({
           <div className="flex items-center justify-between">
             <DrawerTitle>카테고리 선택</DrawerTitle>
             {bookId && (
-              <Link href={`/book/${bookId}/category`}>
+              <Link href={`/book/${bookId}/categories`}>
                 <Button variant="ghost" size="icon">
                   <Settings className="h-4 w-4" />
                   <span className="sr-only">카테고리 편집</span>
@@ -136,7 +136,7 @@ function CategoryDrawer({
               <br />
               <Link
                 href={
-                  bookId ? `/book/${bookId}/category/add` : "/book/category"
+                  bookId ? `/book/${bookId}/categories/add` : "/book/category"
                 }
                 className="text-primary hover:underline"
               >
@@ -218,7 +218,7 @@ function ExpenseForm({
       categoryId: "",
       amount: "",
       date: new Date(),
-      memo: "",
+      description: "",
     },
   });
 
@@ -246,7 +246,7 @@ function ExpenseForm({
         categoryId: expense.categoryId,
         amount: expense.amount.toString(),
         date: dateValue,
-        memo: expense.description || "",
+        description: expense.description || "",
       });
     }
   }, [expense, form]);
@@ -288,7 +288,7 @@ function ExpenseForm({
           categoryId: data.categoryId,
           amount: Number(data.amount),
           date: DateTime.fromJSDate(data.date).toFormat("yyyy-MM-dd"),
-          memo: data.memo?.trim() || null,
+          description: data.description?.trim() || null,
         },
       },
       {
@@ -426,7 +426,7 @@ function ExpenseForm({
 
         <FormField
           control={form.control}
-          name="memo"
+          name="description"
           render={({ field }) => (
             <FormItem>
               <FormLabel>메모</FormLabel>
@@ -458,10 +458,10 @@ function ExpenseForm({
               <Button
                 type="button"
                 variant="destructive"
-                disabled={isDeleting}
+                disabled={deleteExpense.isPending}
                 className="flex-1"
               >
-                {isDeleting ? (
+                {deleteExpense.isPending ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     삭제 중...
@@ -884,10 +884,10 @@ function IncomeForm({
               <Button
                 type="button"
                 variant="destructive"
-                disabled={isDeleting}
+                disabled={deleteIncome.isPending}
                 className="flex-1"
               >
-                {isDeleting ? (
+                {deleteIncome.isPending ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     삭제 중...

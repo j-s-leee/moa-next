@@ -52,7 +52,7 @@ export default function BudgetSuggestPage() {
         setCurrentBookId(booksData.books[0].id);
       } else {
         toast.error("가계부를 찾을 수 없습니다.");
-        router.push("/book/budget");
+        router.push(`/book/${currentBookId || booksData?.books[0]?.id || ""}/budgets`);
       }
     }
   }, [booksData, currentBookId, setCurrentBookId, router]);
@@ -243,7 +243,7 @@ export default function BudgetSuggestPage() {
     >
       <Tabs
         value={period}
-        onValueChange={(v) => router.push(`/book/budget/suggest?period=${v}`)}
+        onValueChange={(v) => router.push(`/book/${currentBookId || booksData?.books[0]?.id || ""}/budgets/suggest?period=${v}`)}
       >
         <div className="flex items-center justify-between mb-6">
           <TabsList>

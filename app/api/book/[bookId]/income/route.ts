@@ -13,15 +13,20 @@ import {
   isNotNull,
 } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { isValidDateString } from "@/lib/utils/date";
+import { isValidDateString, extractYearMonthDayFromDateTime } from "@/lib/utils/date";
 import { DateTime } from "luxon";
 
 /**
  * 수입 목록 조회 API
- * GET /api/book/[bookId]/income?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&incomeType=actual|transfer
+ * GET /api/book/[bookId]/income?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&year=YYYY&month=MM&incomeType=actual|transfer
  *
  * 특정 가계부의 수입 목록을 조회합니다.
  * 쿼리 파라미터로 기간 및 수입 타입 필터링 가능합니다.
+ * 
+ * 필터링 우선순위:
+ * 1. year와 month가 모두 제공되면 → year/month 사용 (단일 거래만, 인덱스 최적화)
+ * 2. year만 제공되면 → year 사용 (단일 거래만, 인덱스 최적화)
+ * 3. startDate/endDate가 제공되면 → date 또는 startDate/endDate 사용 (범위 쿼리)
  */
 export async function GET(
   request: Request,
@@ -63,11 +68,38 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const startDateParam = searchParams.get("startDate");
     const endDateParam = searchParams.get("endDate");
+    const yearParam = searchParams.get("year");
+    const monthParam = searchParams.get("month");
     const incomeTypeParam = searchParams.get("incomeType");
 
     // 날짜 파싱 및 검증 (YYYY-MM-DD 형식)
     let startDate: DateTime | null = null;
     let endDate: DateTime | null = null;
+    let year: number | null = null;
+    let month: number | null = null;
+
+    // year/month 파라미터 파싱
+    if (yearParam) {
+      const parsedYear = parseInt(yearParam, 10);
+      if (isNaN(parsedYear) || parsedYear < 1900 || parsedYear > 2100) {
+        return NextResponse.json(
+          { error: "연도는 1900-2100 사이의 숫자여야 합니다." },
+          { status: 400 }
+        );
+      }
+      year = parsedYear;
+    }
+
+    if (monthParam) {
+      const parsedMonth = parseInt(monthParam, 10);
+      if (isNaN(parsedMonth) || parsedMonth < 1 || parsedMonth > 12) {
+        return NextResponse.json(
+          { error: "월은 1-12 사이의 숫자여야 합니다." },
+          { status: 400 }
+        );
+      }
+      month = parsedMonth;
+    }
 
     if (startDateParam) {
       try {
@@ -128,8 +160,99 @@ export async function GET(
     // 수입 조회 조건 구성
     const whereConditions = [eq(incomes.bookId, bookId)];
 
-    // 기간 필터링: 단일 거래(date)와 반복 수입(startDate/endDate) 모두 고려
-    if (startDate || endDate) {
+    // 기간 필터링: year/month 우선, 그 다음 startDate/endDate
+    // year와 month가 모두 제공되면 단일 거래에 대해 year/month 사용 (인덱스 최적화)
+    if (year !== null && month !== null) {
+      // 단일 거래만 필터링 (year/month는 단일 거래에만 사용)
+      const singleTransactionCondition = and(
+        isNotNull(incomes.date), // date가 있어야 단일 거래
+        eq(incomes.year, year),
+        eq(incomes.month, month)
+      )!;
+      
+      // 반복 수입은 startDate/endDate 범위로 필터링 (기존 로직)
+      let recurringIncomeCondition = null;
+      if (startDate || endDate) {
+        if (startDate && endDate) {
+          const endDateCheck = or(
+            gte(incomes.endDate, startDate.toFormat("yyyy-MM-dd")),
+            isNull(incomes.endDate)
+          )!;
+          recurringIncomeCondition = and(
+            isNotNull(incomes.period), // period가 있으면 반복 수입
+            lt(incomes.startDate, endDate.toFormat("yyyy-MM-dd")),
+            endDateCheck
+          )!;
+        } else if (startDate) {
+          const endDateCheck = or(
+            gte(incomes.endDate, startDate.toFormat("yyyy-MM-dd")),
+            isNull(incomes.endDate)
+          )!;
+          recurringIncomeCondition = and(
+            isNotNull(incomes.period),
+            endDateCheck
+          )!;
+        } else if (endDate) {
+          recurringIncomeCondition = and(
+            isNotNull(incomes.period),
+            lt(incomes.startDate, endDate.toFormat("yyyy-MM-dd"))
+          )!;
+        }
+      }
+      
+      if (recurringIncomeCondition) {
+        whereConditions.push(
+          or(singleTransactionCondition, recurringIncomeCondition)!
+        );
+      } else {
+        whereConditions.push(singleTransactionCondition);
+      }
+    } else if (year !== null) {
+      // year만 제공되면 단일 거래에 대해 year 사용 (인덱스 최적화)
+      const singleTransactionCondition = and(
+        isNotNull(incomes.date),
+        eq(incomes.year, year)
+      )!;
+      
+      // 반복 수입은 startDate/endDate 범위로 필터링
+      let recurringIncomeCondition = null;
+      if (startDate || endDate) {
+        if (startDate && endDate) {
+          const endDateCheck = or(
+            gte(incomes.endDate, startDate.toFormat("yyyy-MM-dd")),
+            isNull(incomes.endDate)
+          )!;
+          recurringIncomeCondition = and(
+            isNotNull(incomes.period),
+            lt(incomes.startDate, endDate.toFormat("yyyy-MM-dd")),
+            endDateCheck
+          )!;
+        } else if (startDate) {
+          const endDateCheck = or(
+            gte(incomes.endDate, startDate.toFormat("yyyy-MM-dd")),
+            isNull(incomes.endDate)
+          )!;
+          recurringIncomeCondition = and(
+            isNotNull(incomes.period),
+            endDateCheck
+          )!;
+        } else if (endDate) {
+          recurringIncomeCondition = and(
+            isNotNull(incomes.period),
+            lt(incomes.startDate, endDate.toFormat("yyyy-MM-dd"))
+          )!;
+        }
+      }
+      
+      if (recurringIncomeCondition) {
+        whereConditions.push(
+          or(singleTransactionCondition, recurringIncomeCondition)!
+        );
+      } else {
+        whereConditions.push(singleTransactionCondition);
+      }
+    } else if (startDate || endDate) {
+      // 기존 방식: startDate/endDate 범위 쿼리
       if (startDate && endDate) {
         // 두 날짜 모두 있는 경우:
         // 1. 단일 거래: date가 기간 내에 있는 경우
@@ -346,6 +469,9 @@ export async function POST(
 
     // 단일 거래인 경우
     let incomeDate: string | null = null;
+    let incomeYear: number | null = null;
+    let incomeMonth: number | null = null;
+    let incomeDay: number | null = null;
     if (isSingleTransaction) {
       try {
         if (typeof date !== "string" || !isValidDateString(date)) {
@@ -362,6 +488,11 @@ export async function POST(
           );
         }
         incomeDate = dateTime.toFormat("yyyy-MM-dd");
+        // year/month/day 추출
+        const { year, month, day } = extractYearMonthDayFromDateTime(dateTime);
+        incomeYear = year;
+        incomeMonth = month;
+        incomeDay = day;
       } catch (error) {
         return NextResponse.json(
           {
@@ -487,6 +618,9 @@ export async function POST(
         categoryId,
         amount: Math.round(amount), // 소수점 제거
         date: incomeDate, // 단일 거래 날짜 (nullable, YYYY-MM-DD 형식)
+        year: incomeYear, // 단일 거래 연도 (nullable, date가 있을 때만)
+        month: incomeMonth, // 단일 거래 월 (nullable, date가 있을 때만)
+        day: incomeDay, // 단일 거래 일 (nullable, date가 있을 때만)
         period: isRecurringIncome ? period : null, // 반복 주기 (nullable)
         source: source?.trim() || null, // 선택사항
         incomeType: finalIncomeType,

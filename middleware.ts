@@ -66,9 +66,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(redirectUrl)
   }
 
-  // 로그인/회원가입 페이지에 로그인된 사용자 접근 시 대시보드로 리다이렉트
+  // 로그인/회원가입 페이지에 로그인된 사용자 접근 시 루트로 리다이렉트
+  // (루트 페이지에서 개인 가계부로 리다이렉트 처리)
   if (isAuthPath && user) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
+    return NextResponse.redirect(new URL('/', request.url))
   }
 
   return response

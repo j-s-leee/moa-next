@@ -5,6 +5,7 @@ import {
   date,
   boolean,
   integer,
+  smallint,
   pgEnum,
   uuid,
   jsonb,
@@ -189,6 +190,10 @@ export const categories = pgTable(
  * 예산 테이블
  * 가계부별로 독립적으로 존재하며, 카테고리와 연결됨
  * 예산 잔액은 저장하지 않고 계산 (단일 진실 공급원 원칙)
+ * 
+ * year/month 컬럼:
+ * - month가 null이면 연간 예산 (year만 사용)
+ * - month가 있으면 월간 예산 (year와 month 사용)
  */
 export const budgets = pgTable(
   "budgets",
@@ -201,9 +206,11 @@ export const budgets = pgTable(
       .notNull()
       .references(() => categories.id, { onDelete: "cascade" }),
     period: budgetPeriodEnum("period").notNull(), // 'monthly' | 'yearly'
+    year: smallint("year").notNull(), // 예산 연도
+    month: smallint("month"), // 예산 월 (nullable: null이면 연간 예산, 값이 있으면 월간 예산)
     amount: integer("amount").notNull(), // 예산 금액 (원 단위)
-    startDate: date("start_date").notNull(),
-    endDate: date("end_date").notNull(),
+    startDate: date("start_date").notNull(), // 기존 유지 (호환성)
+    endDate: date("end_date").notNull(), // 기존 유지 (호환성)
     previousBudgetId: uuid("previous_budget_id"), // 예산 수정 이력 (self-reference는 relations에서 처리)
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -222,6 +229,11 @@ export const budgets = pgTable(
     previousIdx: index("budgets_previous_budget_id_idx").on(
       table.previousBudgetId
     ),
+    bookYearMonthIdx: index("budgets_book_year_month_idx").on(
+      table.bookId,
+      table.year,
+      table.month
+    ),
   })
 );
 
@@ -233,6 +245,11 @@ export const budgets = pgTable(
  * 지출 테이블
  * 가계부별로 독립적으로 존재하며, 카테고리와 연결됨
  * 예산은 자동으로 연결됨 (선택적)
+ * 
+ * year/month/day 컬럼:
+ * - date 컬럼에서 추출하여 저장 (인덱싱 및 집계 최적화용)
+ * - 특정 월/년 조회 시 year/month 사용
+ * - 범위 조회 시 date 사용
  */
 export const expenses = pgTable(
   "expenses",
@@ -245,7 +262,10 @@ export const expenses = pgTable(
       .notNull()
       .references(() => categories.id, { onDelete: "cascade" }),
     amount: integer("amount").notNull(), // 지출 금액 (원 단위)
-    date: date("date").notNull(), // 지출 날짜
+    date: date("date").notNull(), // 지출 날짜 (범위 쿼리용)
+    year: smallint("year").notNull(), // 지출 연도 (인덱싱 및 집계 최적화용)
+    month: smallint("month").notNull(), // 지출 월 (1-12)
+    day: smallint("day").notNull(), // 지출 일 (1-31)
     description: text("description"), // 메모/설명
     userId: uuid("user_id")
       .notNull()
@@ -261,8 +281,19 @@ export const expenses = pgTable(
     categoryIdx: index("expenses_category_id_idx").on(table.categoryId),
     userIdx: index("expenses_user_id_idx").on(table.userId),
     budgetIdx: index("expenses_budget_id_idx").on(table.budgetId),
-    dateIdx: index("expenses_date_idx").on(table.date),
-    bookDateIdx: index("expenses_book_date_idx").on(table.bookId, table.date),
+    dateIdx: index("expenses_date_idx").on(table.date), // 기존 유지 (범위 쿼리용)
+    bookDateIdx: index("expenses_book_date_idx").on(table.bookId, table.date), // 기존 유지
+    bookYearMonthIdx: index("expenses_book_year_month_idx").on(
+      table.bookId,
+      table.year,
+      table.month
+    ), // 특정 월 조회 최적화
+    bookYearMonthDayIdx: index("expenses_book_year_month_day_idx").on(
+      table.bookId,
+      table.year,
+      table.month,
+      table.day
+    ), // 일별 집계 최적화
   })
 );
 
@@ -274,6 +305,10 @@ export const expenses = pgTable(
  * 수입 테이블
  * 가계부별로 독립적으로 존재
  * actual: 실제 수입, transfer: 개인 가계부에서 공동 가계부로 이체
+ * 
+ * year/month/day 컬럼:
+ * - 단일 거래(date가 있는 경우)에만 사용 (nullable)
+ * - 반복 수입은 period와 startDate/endDate 사용, year/month/day는 null
  */
 export const incomes = pgTable(
   "incomes",
@@ -290,6 +325,9 @@ export const incomes = pgTable(
     // 단일 거래: date만 사용, period와 startDate/endDate는 null
     // 반복 수입: period와 startDate/endDate 사용, date는 null
     date: date("date"), // 단일 거래 날짜 (프리랜서, 자영업자용)
+    year: smallint("year"), // 단일 거래 연도 (nullable, date가 있을 때만 사용)
+    month: smallint("month"), // 단일 거래 월 (nullable, date가 있을 때만 사용)
+    day: smallint("day"), // 단일 거래 일 (nullable, date가 있을 때만 사용)
     period: incomePeriodEnum("period"), // 'monthly' | 'yearly' (반복 수입용, nullable)
     source: text("source"), // 수입 출처 (선택사항, 카테고리 이름으로 대체 가능)
     incomeType: incomeTypeEnum("income_type").notNull().default("actual"), // 'actual' | 'transfer'
@@ -309,12 +347,17 @@ export const incomes = pgTable(
     transferredFromIdx: index("incomes_transferred_from_idx").on(
       table.transferredFromBookId
     ),
-    dateIdx: index("incomes_date_idx").on(table.date), // 단일 거래 날짜 인덱스
+    dateIdx: index("incomes_date_idx").on(table.date), // 단일 거래 날짜 인덱스 (기존 유지)
     dateRangeIdx: index("incomes_date_range_idx").on(
       table.startDate,
       table.endDate
-    ), // 반복 수입 기간 인덱스
-    bookDateIdx: index("incomes_book_date_idx").on(table.bookId, table.date), // 가계부별 단일 거래 조회용
+    ), // 반복 수입 기간 인덱스 (기존 유지)
+    bookDateIdx: index("incomes_book_date_idx").on(table.bookId, table.date), // 가계부별 단일 거래 조회용 (기존 유지)
+    bookYearMonthIdx: index("incomes_book_year_month_idx").on(
+      table.bookId,
+      table.year,
+      table.month
+    ), // 단일 거래 월별 조회 최적화
   })
 );
 

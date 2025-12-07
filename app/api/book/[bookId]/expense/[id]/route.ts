@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { expenses, books, categories, budgets } from "@/lib/db/schema";
 import { eq, and, gte, lte } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { parseDateStringToDate, isValidDateString } from "@/lib/utils/date";
+import { parseDateStringToDate, isValidDateString, extractYearMonthDayFromDateTime } from "@/lib/utils/date";
 import { DateTime } from "luxon";
 
 /**
@@ -161,7 +161,7 @@ export async function PUT(
       }
     }
 
-    let expenseDate: DateTime;
+    let expenseDate: DateTime | null = null;
     if (date !== undefined) {
       try {
         if (typeof date !== "string" || !isValidDateString(date)) {
@@ -243,6 +243,9 @@ export async function PUT(
       categoryId?: string;
       amount?: number;
       date?: string;
+      year?: number;
+      month?: number;
+      day?: number;
       description?: string | null;
       budgetId?: string | null;
       updatedAt: Date;
@@ -258,6 +261,14 @@ export async function PUT(
     }
     if (date !== undefined) {
       updateData.date = date;
+      // date가 변경되면 year/month/day도 함께 업데이트
+      // expenseDate는 위에서 date가 있을 때만 할당됨
+      if (expenseDate) {
+        const { year, month, day } = extractYearMonthDayFromDateTime(expenseDate);
+        updateData.year = year;
+        updateData.month = month;
+        updateData.day = day;
+      }
     }
     if (description !== undefined) {
       updateData.description = description?.trim() || null;

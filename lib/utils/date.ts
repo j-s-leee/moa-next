@@ -112,3 +112,35 @@ export function getYearsAgo(years: number): DateTime {
   return DateTime.utc().minus({ years }).startOf('day')
 }
 
+/**
+ * 날짜 문자열에서 year, month, day를 추출합니다.
+ * 데이터베이스의 year/month/day 컬럼에 저장하기 위해 사용됩니다.
+ */
+export function extractYearMonthDay(dateString: string): {
+  year: number;
+  month: number;
+  day: number;
+} {
+  const dateTime = parseDateString(dateString);
+  return {
+    year: dateTime.year,
+    month: dateTime.month,
+    day: dateTime.day,
+  };
+}
+
+/**
+ * DateTime 객체에서 year, month, day를 추출합니다.
+ */
+export function extractYearMonthDayFromDateTime(dateTime: DateTime): {
+  year: number;
+  month: number;
+  day: number;
+} {
+  return {
+    year: dateTime.year,
+    month: dateTime.month,
+    day: dateTime.day,
+  };
+}
+

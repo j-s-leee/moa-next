@@ -25,19 +25,47 @@ interface ExpensesResponse {
   expenses: ExpenseItem[];
 }
 
+interface ExpenseSummaryResponse {
+  totalAmount: number;
+  count: number;
+}
+
 // 지출 목록 조회
 export function useExpenses(
   bookId: string | null,
-  startDate: DateTime,
-  endDate: DateTime
+  startDate: DateTime | null,
+  endDate: DateTime | null,
+  year?: number | null,
+  month?: number | null
 ) {
   return useQuery({
-    queryKey: ["expenses", bookId, startDate.toISODate(), endDate.toISODate()],
+    queryKey: [
+      "expenses",
+      bookId,
+      startDate?.toISODate(),
+      endDate?.toISODate(),
+      year,
+      month,
+    ],
     queryFn: async () => {
       if (!bookId) return { expenses: [] };
 
+      const params = new URLSearchParams();
+      if (startDate) {
+        params.append("startDate", startDate.toISODate()!);
+      }
+      if (endDate) {
+        params.append("endDate", endDate.toISODate()!);
+      }
+      if (year) {
+        params.append("year", year.toString());
+      }
+      if (month) {
+        params.append("month", month.toString());
+      }
+
       const response = await fetch(
-        `/api/book/${bookId}/expense?startDate=${startDate.toISODate()}&endDate=${endDate.toISODate()}`
+        `/api/book/${bookId}/expense?${params.toString()}`
       );
 
       if (!response.ok) {
@@ -47,7 +75,56 @@ export function useExpenses(
       const data: ExpensesResponse = await response.json();
       return data;
     },
-    enabled: !!bookId,
+    enabled: !!bookId && (!!startDate || !!year),
+  });
+}
+
+// 지출 합계 조회
+export function useExpenseSummary(
+  bookId: string | null,
+  startDate: DateTime | null,
+  endDate: DateTime | null,
+  year?: number | null,
+  month?: number | null
+) {
+  return useQuery({
+    queryKey: [
+      "expenseSummary",
+      bookId,
+      startDate?.toISODate(),
+      endDate?.toISODate(),
+      year,
+      month,
+    ],
+    queryFn: async () => {
+      if (!bookId) return { totalAmount: 0, count: 0 };
+
+      const params = new URLSearchParams();
+      if (startDate) {
+        params.append("startDate", startDate.toISODate()!);
+      }
+      if (endDate) {
+        params.append("endDate", endDate.toISODate()!);
+      }
+      if (year) {
+        params.append("year", year.toString());
+      }
+      if (month) {
+        params.append("month", month.toString());
+      }
+
+      const response = await fetch(
+        `/api/book/${bookId}/expense/summary?${params.toString()}`
+      );
+
+      if (!response.ok) {
+        throw new Error("지출 합계 조회에 실패했습니다.");
+      }
+
+      const data: ExpenseSummaryResponse = await response.json();
+      return data;
+    },
+    enabled: !!bookId && (!!startDate || !!year),
   });
 }
 
@@ -88,7 +165,7 @@ export function useCreateExpense() {
         categoryId: string;
         amount: number;
         date: string;
-        memo?: string | null;
+        description?: string | null;
       };
     }) => {
       const response = await fetch(`/api/book/${bookId}/expense`, {
@@ -140,7 +217,7 @@ export function useUpdateExpense() {
         categoryId?: string;
         amount?: number;
         date?: string;
-        memo?: string | null;
+        description?: string | null;
       };
     }) => {
       const response = await fetch(`/api/book/${bookId}/expense/${expenseId}`, {

@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { budgets, books, categories, expenses } from '@/lib/db/schema'
 import { eq, and, gte, lte, sql } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
-import { parseDateStringToDate, isValidDateString, getMonthRange, getYearRange, formatDateTimeToString, formatDateToString, normalizeDateString } from '@/lib/utils/date'
+import { parseDateStringToDate, parseDateString, isValidDateString, getMonthRange, getYearRange, formatDateTimeToString, formatDateToString, normalizeDateString, extractYearMonthDayFromDateTime, getTodayString } from '@/lib/utils/date'
 
 /**
  * 예산 목록 조회 API
@@ -11,6 +11,9 @@ import { parseDateStringToDate, isValidDateString, getMonthRange, getYearRange, 
  * 
  * 특정 가계부의 예산 목록을 조회합니다.
  * period, year, month 쿼리 파라미터로 필터링 가능합니다.
+ * 
+ * startDate/endDate 범위 쿼리를 사용하여 해당 기간에 적용되는 예산을 조회합니다.
+ * 현재 날짜가 startDate와 endDate 범위에 있는 예산만 조회됩니다.
  */
 export async function GET(
   request: Request,
@@ -66,7 +69,10 @@ export async function GET(
       whereConditions.push(eq(budgets.period, periodParam))
     }
 
-    // 기간 필터링: 특정 년/월에 적용되는 예산 찾기
+    // 현재 날짜 가져오기
+    const today = getTodayString()
+
+    // 기간 필터링: startDate/endDate 범위 쿼리 사용
     if (yearParam) {
       const year = parseInt(yearParam, 10)
       if (!isNaN(year)) {
@@ -77,7 +83,6 @@ export async function GET(
             const { start: startOfMonth, end: endOfMonth } = getMonthRange(year, month)
             
             // 예산의 startDate <= 월의 마지막일 AND 예산의 endDate >= 월의 1일
-            // PgDateString은 string 타입이므로 문자열로 변환
             whereConditions.push(lte(budgets.startDate, formatDateTimeToString(endOfMonth)))
             whereConditions.push(gte(budgets.endDate, formatDateTimeToString(startOfMonth)))
           }
@@ -86,12 +91,15 @@ export async function GET(
           const { start: startOfYear, end: endOfYear } = getYearRange(year)
           
           // 예산의 startDate <= 년의 마지막일 AND 예산의 endDate >= 년의 1일
-          // PgDateString은 string 타입이므로 문자열로 변환
           whereConditions.push(lte(budgets.startDate, formatDateTimeToString(endOfYear)))
           whereConditions.push(gte(budgets.endDate, formatDateTimeToString(startOfYear)))
         }
       }
     }
+
+    // 현재 날짜가 startDate와 endDate 범위에 있는지 확인
+    whereConditions.push(lte(budgets.startDate, today))
+    whereConditions.push(gte(budgets.endDate, today))
 
     // 예산 목록 조회 (카테고리 정보 포함)
     const budgetList = await db
@@ -328,6 +336,12 @@ export async function POST(
       )
     }
 
+    // year/month 추출
+    const startDateTime = parseDateString(normalizeDateString(startDate));
+    const year = startDateTime.year;
+    // period가 'monthly'이면 month 설정, 'yearly'이면 null
+    const month = period === 'monthly' ? startDateTime.month : null;
+
     // 예산 생성
     // PgDateString은 string 타입이므로 Date를 문자열로 변환
     const [newBudget] = await db
@@ -336,6 +350,8 @@ export async function POST(
         bookId,
         categoryId,
         period,
+        year,
+        month,
         amount: Math.round(amount), // 소수점 제거
         startDate: formatDateToString(start),
         endDate: formatDateToString(end),
