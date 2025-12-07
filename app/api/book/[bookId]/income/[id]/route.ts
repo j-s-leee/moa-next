@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { incomes, books, categories } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { isValidDateString } from "@/lib/utils/date";
+import { isValidDateString, extractYearMonthDayFromDateTime } from "@/lib/utils/date";
 import { DateTime } from "luxon";
 
 /**
@@ -231,6 +231,10 @@ export async function PUT(
     if (date !== undefined) {
       if (date === null) {
         updateData.date = null;
+        // date가 null이면 year/month/day도 null로 설정
+        updateData.year = null;
+        updateData.month = null;
+        updateData.day = null;
       } else {
         try {
           if (typeof date !== "string" || !isValidDateString(date)) {
@@ -247,6 +251,11 @@ export async function PUT(
             );
           }
           updateData.date = dateTime.toFormat("yyyy-MM-dd");
+          // date가 변경되면 year/month/day도 함께 업데이트
+          const { year, month, day } = extractYearMonthDayFromDateTime(dateTime);
+          updateData.year = year;
+          updateData.month = month;
+          updateData.day = day;
         } catch (error) {
           return NextResponse.json(
             {

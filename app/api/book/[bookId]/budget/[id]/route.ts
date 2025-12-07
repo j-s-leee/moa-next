@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { budgets, books, categories, expenses } from '@/lib/db/schema'
 import { eq, and, lte, gte, ne } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
-import { parseDateStringToDate, isValidDateString, normalizeDateString, formatDateToString } from '@/lib/utils/date'
+import { parseDateStringToDate, isValidDateString, normalizeDateString, formatDateToString, parseDateString } from '@/lib/utils/date'
 
 /**
  * 예산 수정 API
@@ -89,6 +89,8 @@ export async function PUT(
       amount?: number
       startDate?: string
       endDate?: string
+      year?: number
+      month?: number | null
       previousBudgetId?: string
       updatedAt: Date
     } = {
@@ -178,6 +180,14 @@ export async function PUT(
         { error: '시작일은 종료일보다 이전이어야 합니다.' },
         { status: 400 }
       )
+    }
+
+    // startDate가 변경되면 year/month도 업데이트
+    if (startDate) {
+      const startDateTime = parseDateString(normalizeDateString(startDate));
+      updateData.year = startDateTime.year;
+      // period가 'monthly'이면 month 설정, 'yearly'이면 null
+      updateData.month = existingBudget.period === 'monthly' ? startDateTime.month : null;
     }
 
     // 기간이 변경된 경우 중복 확인

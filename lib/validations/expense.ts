@@ -11,7 +11,7 @@ export const expenseSchema = z.object({
   date: z.date({
     required_error: "날짜를 선택해주세요",
   }),
-  memo: z.string().max(200, "메모는 200자 이내로 입력해주세요").optional(),
+  description: z.string().max(200, "메모는 200자 이내로 입력해주세요").optional(),
 });
 
 export type ExpenseFormData = z.infer<typeof expenseSchema>;

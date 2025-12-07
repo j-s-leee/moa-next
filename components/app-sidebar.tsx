@@ -27,7 +27,7 @@ const data = {
   navPersonal: [
     {
       title: "요약",
-      url: "/summary",
+      url: "/summary", // 첫 번째 가계부로 자동 리다이렉트
       icon: ChartBar,
     },
     {
@@ -43,7 +43,7 @@ const data = {
     },
     {
       title: "예산 관리",
-      url: "/book/budget",
+      url: "/book/budget", // 첫 번째 가계부로 자동 리다이렉트
       icon: Wallet,
     },
   ],

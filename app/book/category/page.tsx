@@ -20,7 +20,7 @@ export default function CategoryPageRedirect() {
         }
         const data = await response.json();
         if (data.books && data.books.length > 0) {
-          router.replace(`/book/${data.books[0].id}/category`);
+          router.replace(`/book/${data.books[0].id}/categories`);
         } else {
           router.replace("/book");
         }
