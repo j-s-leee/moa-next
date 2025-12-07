@@ -13,7 +13,7 @@ next.js app router 방식에서의 parallel routes를 사용한 Master-detail �
 ├── login
 ├── book/[id]
 │   ├── summary?year=[year]&month=[month]
-│   ├── categories
+│   ├── categories?year=[year]&month=[month]
 │   │   ├── [categoryId]
 │   │   │   └── edit
 │   │   ├── add

@@ -17,10 +17,12 @@ export function MonthSelector({
   selectedDate,
   onDateChange,
   bookId,
+  basePath = "summary",
 }: {
   selectedDate: Date;
   onDateChange: (date: Date) => void;
   bookId: string;
+  basePath?: string;
 }) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
@@ -72,7 +74,7 @@ export function MonthSelector({
   const handleMonthSelect = (year: number, month: number) => {
     const newDate = new Date(year, month - 1, 1);
     onDateChange(newDate);
-    router.push(`/book/${bookId}/summary?year=${year}&month=${month}`);
+    router.push(`/book/${bookId}/${basePath}?year=${year}&month=${month}`);
     setOpen(false);
   };
 

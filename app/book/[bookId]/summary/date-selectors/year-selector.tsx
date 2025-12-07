@@ -17,10 +17,12 @@ export function YearSelector({
   selectedYear,
   onYearChange,
   bookId,
+  basePath = "summary",
 }: {
   selectedYear: number;
   onYearChange: (year: number) => void;
   bookId: string;
+  basePath?: string;
 }) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
@@ -45,7 +47,7 @@ export function YearSelector({
 
   const handleYearSelect = (year: number) => {
     onYearChange(year);
-    router.push(`/book/${bookId}/summary?year=${year}`);
+    router.push(`/book/${bookId}/${basePath}?year=${year}`);
     setOpen(false);
   };
 

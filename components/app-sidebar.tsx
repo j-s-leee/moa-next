@@ -37,12 +37,12 @@ const data = {
       contextMenuItems: [],
     },
     {
-      title: "카테고리 관리",
+      title: "카테고리",
       url: "/book/category", // 첫 번째 가계부로 자동 리다이렉트
       icon: ListChevronsUpDown,
     },
     {
-      title: "예산 관리",
+      title: "예산",
       url: "/book/budget", // 첫 번째 가계부로 자동 리다이렉트
       icon: Wallet,
     },
